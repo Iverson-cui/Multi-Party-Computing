@@ -365,7 +365,9 @@ class Sender:
                 )
 
                 # Encrypt output label with input label as key
-                encrypted_entry = CryptoUtils.encrypt(input_label, output_label)
+                encrypted_entry = CryptoUtils.encrypt(
+                    input_label, output_label + b"right"
+                )
                 garbled_table.append(encrypted_entry)
         else:
             # Binary gates (AND, OR, XOR) have two inputs
@@ -392,7 +394,7 @@ class Sender:
                     # Encrypt output label with concatenated input labels
                     # encrypt output key with 2 input keys. We concatenate 2 input keys together.
                     key = label_0 + label_1
-                    encrypted_entry = CryptoUtils.encrypt(key, output_label)
+                    encrypted_entry = CryptoUtils.encrypt(key, output_label + b"right")
                     garbled_table.append(encrypted_entry)
 
         # IMPORTANT: In a real implementation, we would shuffle the garbled table
@@ -573,8 +575,16 @@ class Receiver:
                     output_label = CryptoUtils.decrypt(input_label, encrypted_entry)
                     # In a real implementation, we'd verify this is a valid label
                     # using a MAC or by checking label format
-                    return output_label
-                except:
+                    # Validate the decrypted label
+                    if (
+                        len(output_label) == 21
+                        and isinstance(output_label, bytes)
+                        and output_label.endswith(b"right")
+                    ):
+                        return output_label[:16]
+                    else:
+                        continue  # Invalid format, try next entry
+                except Exception:
                     continue
         else:
             # Binary gate: two inputs
@@ -587,8 +597,15 @@ class Receiver:
                 try:
                     output_label = CryptoUtils.decrypt(key, encrypted_entry)
                     # In practice, we'd verify this decryption succeeded
-                    return output_label
-                except:
+                    if (
+                        len(output_label) == 21
+                        and isinstance(output_label, bytes)
+                        and output_label.endswith(b"right")
+                    ):
+                        return output_label[:16]
+                    else:
+                        continue  # Invalid format, try next entry
+                except Exception:
                     continue
 
         raise ValueError(f"Failed to evaluate gate {gate.gate_id}")
