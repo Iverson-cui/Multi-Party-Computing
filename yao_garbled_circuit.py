@@ -146,12 +146,13 @@ class Circuit:
     """
     Represents a Boolean circuit as a directed acyclic graph of gates.
     The circuit computes a function from input wires to output wires.
+    The wiring is described by the connections between gates and wires. It's like in verilog, where you describe which wires are connected to the gate.
     """
 
-    # ? How does it describe the circuit structure since circuit is just a list of Gate?
     gates: List[Gate]
     input_wires: List[Wire]  # Wires for inputs from both parties
     output_wires: List[Wire]  # Wires that hold the final outputs
+    # alice_input_wires and bob_input_wires is chosen from input_wires
     alice_input_wires: List[Wire]  # Which inputs belong to Alice (Sender)
     bob_input_wires: List[Wire]  # Which inputs belong to Bob (Receiver)
 
@@ -281,6 +282,13 @@ class Sender:
         """
         Phase 1: Garble the Boolean circuit.
         This creates random labels for each wire and encrypts gate truth tables.
+
+        What will be done in this function:
+        1. create a dictionary that contains pairs with key the wire name and value a GarbleWire object which contains 2 cryptographic labels.
+
+        2. create a list containing all of the Garbled gate. Each Garbled gate contains a table of output labels.
+
+        3.  create a dictionary with every value in the pair a dictionary. This is the output decryption table. The inner dict contains the relationship between cryptographic labels and real values.
         """
         print("[Sender] Starting circuit garbling process...")
 
@@ -295,7 +303,7 @@ class Sender:
             # add is used to add single element to the set.
             all_wires.add(gate.output_wire)
 
-        # Up until now, we have all the wires. Next we need to create garbled wires for each wire.
+        # Up until now, we have all the wires. Next we need to create 2 labels for each wire.
         for wire in all_wires:
             self.garbled_wires[wire] = GarbledWire(
                 wire=wire,
@@ -320,7 +328,7 @@ class Sender:
                 garbled_wire.label_0: False,
                 garbled_wire.label_1: True,
             }
-
+        # Doesn't need to return everything, the garbled circuit is already contained in the attribute.
         self.garbled_circuit = GarbledCircuit(
             circuit=self.circuit, garbled_gates=garbled_gates, output_map=output_map
         )
@@ -402,6 +410,7 @@ class Sender:
             raise ValueError("No receiver connected!")
 
         print("[Sender] Sending garbled circuit to Receiver...")
+        # Sender has garbled circuit become its attribute. So does receiver.
         self.receiver.receive_garbled_circuit(self.garbled_circuit)
 
     def provide_input_labels_via_ot(self, bob_inputs: Dict[Wire, bool]):
@@ -459,11 +468,14 @@ class Sender:
         self.send_garbled_circuit()
 
         # Step 3: Provide Bob's input labels via OT
+        # This should be optimized actually. Sender should not know Receiver's inputs.
         bob_labels = self.provide_input_labels_via_ot(bob_inputs)
+        # Send Bob's labels to Bob
         self.receiver.receive_input_labels(bob_labels)
 
         # Step 4: Provide Alice's input labels
         alice_labels = self.provide_own_input_labels(alice_inputs)
+        # Send Alice's labels to Bob
         self.receiver.receive_input_labels(alice_labels)
 
         # Step 5: Let Bob evaluate the circuit
@@ -525,6 +537,7 @@ class Receiver:
             wire_labels[gate.output_wire] = output_label
 
         # Decode the output labels to get Boolean results
+        # results is a dictionary containing the relationship between wires and values
         results = {}
         for output_wire in self.garbled_circuit.circuit.output_wires:
             output_label = wire_labels[output_wire]
@@ -616,6 +629,8 @@ def create_comparison_circuit() -> Circuit:
     Returns TRUE if Alice's number >= Bob's number.
 
     This demonstrates a more complex circuit with multiple gates.
+
+    This function initialize wires and gates, then connect wires to the gates. No cryptographic operation is done.
     """
     # Alice's 2-bit input (a1, a0)
     a1 = Wire("alice_bit_1")
