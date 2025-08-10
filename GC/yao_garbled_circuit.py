@@ -51,9 +51,9 @@ class CryptoUtils:
         return hashlib.sha256(data).digest()
 
     @staticmethod
-    def encrypt(key: bytes, plaintext: bytes) -> bytes:
+    def OTP_encrypt(key: bytes, plaintext: bytes) -> bytes:
         """
-        Simplified encryption using XOR with a hash-derived pad.
+        Simplified encryption using XOR with a hash-derived pad. This is the so-called One Time Pad encryption, where you randomly generate a pad and do XOR with the key and the plaintext.
         In production, use AES-GCM or similar authenticated encryption.
 
         The encryption works by:
@@ -71,12 +71,60 @@ class CryptoUtils:
         return ciphertext
 
     @staticmethod
-    def decrypt(key: bytes, ciphertext: bytes) -> bytes:
+    def OTP_decrypt(key: bytes, ciphertext: bytes) -> bytes:
         """
         Decryption is the same as encryption for XOR cipher.
         If keys are the same in encryption and decryption, the process is totally similar.
         """
-        return CryptoUtils.encrypt(key, ciphertext)
+        return CryptoUtils.OTP_encrypt(key, ciphertext)
+
+    @staticmethod
+    def public_key_encrypt(public_key: bytes, plaintext: bytes) -> bytes:
+        """
+        Simplified public key encryption using RSA-like operations.
+        In production, use proper RSA with OAEP padding or similar.
+
+        The encryption works by:
+        1. Using the public key as a seed for key derivation
+        2. Creating a symmetric key from the public key
+        3. Encrypting with the derived symmetric key
+        """
+        # Derive a symmetric key from the public key
+        # In real RSA, this would involve modular exponentiation
+        derived_key = CryptoUtils.hash_function(public_key + b"public_encrypt")
+
+        # Use the derived key for symmetric encryption (simulating asymmetric)
+        # In practice, this would be actual RSA encryption with proper padding
+        ciphertext = CryptoUtils.OTP_encrypt(derived_key, plaintext)
+
+        # Prepend a marker to indicate this is public key encrypted
+        return b"PK_ENC:" + ciphertext
+
+    @staticmethod
+    def public_key_decrypt(private_key: bytes, ciphertext: bytes) -> bytes:
+        """
+        Simplified public key decryption using RSA-like operations.
+        In production, use proper RSA with OAEP padding or similar.
+
+        The decryption works by:
+        1. Using the private key to derive the same symmetric key
+        2. Decrypting with the derived symmetric key
+        """
+        # Verify this is a public key encrypted message
+        if not ciphertext.startswith(b"PK_ENC:"):
+            raise ValueError("Invalid ciphertext format for public key decryption")
+
+        # Remove the marker
+        actual_ciphertext = ciphertext[7:]  # Remove "PK_ENC:" prefix
+
+        # Derive the same symmetric key from the private key
+        # In real RSA, the private key would be mathematically related to public key
+        derived_key = CryptoUtils.hash_function(private_key + b"public_encrypt")
+
+        # Decrypt using the derived key
+        plaintext = CryptoUtils.OTP_decrypt(derived_key, actual_ciphertext)
+
+        return plaintext
 
 
 # ================== CIRCUIT REPRESENTATION ==================
@@ -365,7 +413,7 @@ class Sender:
                 )
 
                 # Encrypt output label with input label as key
-                encrypted_entry = CryptoUtils.encrypt(
+                encrypted_entry = CryptoUtils.OTP_encrypt(
                     input_label, output_label + b"right"
                 )
                 garbled_table.append(encrypted_entry)
@@ -394,7 +442,9 @@ class Sender:
                     # Encrypt output label with concatenated input labels
                     # encrypt output key with 2 input keys. We concatenate 2 input keys together.
                     key = label_0 + label_1
-                    encrypted_entry = CryptoUtils.encrypt(key, output_label + b"right")
+                    encrypted_entry = CryptoUtils.OTP_encrypt(
+                        key, output_label + b"right"
+                    )
                     garbled_table.append(encrypted_entry)
 
         # IMPORTANT: In a real implementation, we would shuffle the garbled table
@@ -572,7 +622,7 @@ class Receiver:
             # Try to decrypt each entry
             for encrypted_entry in garbled_gate.garbled_table:
                 try:
-                    output_label = CryptoUtils.decrypt(input_label, encrypted_entry)
+                    output_label = CryptoUtils.OTP_decrypt(input_label, encrypted_entry)
                     # In a real implementation, we'd verify this is a valid label
                     # using a MAC or by checking label format
                     # Validate the decrypted label
@@ -595,7 +645,7 @@ class Receiver:
             # Try to decrypt each entry
             for encrypted_entry in garbled_gate.garbled_table:
                 try:
-                    output_label = CryptoUtils.decrypt(key, encrypted_entry)
+                    output_label = CryptoUtils.OTP_decrypt(key, encrypted_entry)
                     # In practice, we'd verify this decryption succeeded
                     if (
                         len(output_label) == 21
