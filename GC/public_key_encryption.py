@@ -101,7 +101,7 @@ class PublicKeyEncryption:
                     label=None,
                 ),
             )
-            return plaintext.decode("utf-8")
+            return plaintext
         except Exception as e:
             # Wrap the cryptography library's exceptions in something more user-friendly
             raise ValueError(f"Decryption failed: {str(e)}")

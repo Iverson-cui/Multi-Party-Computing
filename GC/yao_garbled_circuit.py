@@ -18,7 +18,7 @@ import json
 from enum import Enum
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
-
+from oblivious_transfer import *
 
 # ================== CRYPTOGRAPHIC PRIMITIVES ==================
 
@@ -480,11 +480,21 @@ class Sender:
             garbled_wire = self.garbled_wires[wire]
 
             # Alice provides both labels, Bob chooses based on his input
-            both_labels = (garbled_wire.label_0, garbled_wire.label_1)
-            bob_choice = bob_inputs[wire]
+            # both_labels = (garbled_wire.label_0, garbled_wire.label_1)
+            bob_choice = 1 if bob_inputs[wire] else 0
 
-            # Simulate OT (in reality, this would be a multi-round protocol)
-            chosen_label = ObliviousTransfer.transfer(both_labels, bob_choice)
+            receiver = OTReceiver(selection_bit=bob_choice)
+            sender = OTSender(garbled_wire.label_0, garbled_wire.label_1)
+
+            pk0, pk1 = receiver.prepare_key_pairs()
+            e0, e1 = sender.encrypt_secrets(pk0, pk1)
+            chosen_label = receiver.decrypt_chosen_secret(e0, e1)
+            chosen_label = (
+                chosen_label.encode() if isinstance(chosen_label, str) else chosen_label
+            )
+
+            # # Simulate OT (in reality, this would be a multi-round protocol)
+            # chosen_label = ObliviousTransfer.transfer(both_labels, bob_choice)
             bob_labels[wire] = chosen_label
 
         # Finally bob gets a dictionary, whose keys are wires and whose values are corresponding cryptographic labels.
