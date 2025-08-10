@@ -284,7 +284,6 @@ class ObliviousTransfer:
     A real implementation would use public key cryptography (RSA-OT, DDH-OT, etc.)
     """
 
-    # TODO: implement cryptographic version of OT.
     @staticmethod
     def transfer(sender_messages: Tuple[bytes, bytes], receiver_choice: bool) -> bytes:
         """
@@ -754,6 +753,283 @@ def create_comparison_circuit() -> Circuit:
     )
 
 
+def create_8bit_multiplication_circuit() -> Circuit:
+    """
+    Create a circuit that multiplies two 4-bit numbers (Alice's and Bob's).
+    Returns the 8-bit product.
+
+    This circuit implements binary multiplication using the standard
+    shift-and-add algorithm, resulting in approximately 60-80 gates.
+
+    Alice has a 4-bit number: a3, a2, a1, a0
+    Bob has a 4-bit number: b3, b2, b1, b0
+    Output is an 8-bit product: p7, p6, p5, p4, p3, p2, p1, p0
+    """
+
+    # Alice's 4-bit input (most significant bit first)
+    a3 = Wire("alice_bit_3")  # MSB
+    a2 = Wire("alice_bit_2")
+    a1 = Wire("alice_bit_1")
+    a0 = Wire("alice_bit_0")  # LSB
+
+    # Bob's 4-bit input
+    b3 = Wire("bob_bit_3")  # MSB
+    b2 = Wire("bob_bit_2")
+    b1 = Wire("bob_bit_1")
+    b0 = Wire("bob_bit_0")  # LSB
+
+    # Output wires for 8-bit product
+    p7 = Wire("product_bit_7")  # MSB
+    p6 = Wire("product_bit_6")
+    p5 = Wire("product_bit_5")
+    p4 = Wire("product_bit_4")
+    p3 = Wire("product_bit_3")
+    p2 = Wire("product_bit_2")
+    p1 = Wire("product_bit_1")
+    p0 = Wire("product_bit_0")  # LSB
+
+    gates = []
+    wire_counter = 0
+
+    def get_temp_wire():
+        nonlocal wire_counter
+        wire = Wire(f"temp_{wire_counter}")
+        wire_counter += 1
+        return wire
+
+    # Multiplication using shift-and-add algorithm
+    # We'll create partial products and then add them
+
+    # Partial product 0: a * b0
+    pp0_0 = get_temp_wire()  # a0 & b0
+    pp0_1 = get_temp_wire()  # a1 & b0
+    pp0_2 = get_temp_wire()  # a2 & b0
+    pp0_3 = get_temp_wire()  # a3 & b0
+
+    gates.extend(
+        [
+            Gate("pp0_0", GateType.AND, [a0, b0], pp0_0),
+            Gate("pp0_1", GateType.AND, [a1, b0], pp0_1),
+            Gate("pp0_2", GateType.AND, [a2, b0], pp0_2),
+            Gate("pp0_3", GateType.AND, [a3, b0], pp0_3),
+        ]
+    )
+
+    # Partial product 1: a * b1 (shifted left by 1)
+    pp1_0 = get_temp_wire()  # a0 & b1
+    pp1_1 = get_temp_wire()  # a1 & b1
+    pp1_2 = get_temp_wire()  # a2 & b1
+    pp1_3 = get_temp_wire()  # a3 & b1
+
+    gates.extend(
+        [
+            Gate("pp1_0", GateType.AND, [a0, b1], pp1_0),
+            Gate("pp1_1", GateType.AND, [a1, b1], pp1_1),
+            Gate("pp1_2", GateType.AND, [a2, b1], pp1_2),
+            Gate("pp1_3", GateType.AND, [a3, b1], pp1_3),
+        ]
+    )
+
+    # Partial product 2: a * b2 (shifted left by 2)
+    pp2_0 = get_temp_wire()  # a0 & b2
+    pp2_1 = get_temp_wire()  # a1 & b2
+    pp2_2 = get_temp_wire()  # a2 & b2
+    pp2_3 = get_temp_wire()  # a3 & b2
+
+    gates.extend(
+        [
+            Gate("pp2_0", GateType.AND, [a0, b2], pp2_0),
+            Gate("pp2_1", GateType.AND, [a1, b2], pp2_1),
+            Gate("pp2_2", GateType.AND, [a2, b2], pp2_2),
+            Gate("pp2_3", GateType.AND, [a3, b2], pp2_3),
+        ]
+    )
+
+    # Partial product 3: a * b3 (shifted left by 3)
+    pp3_0 = get_temp_wire()  # a0 & b3
+    pp3_1 = get_temp_wire()  # a1 & b3
+    pp3_2 = get_temp_wire()  # a2 & b3
+    pp3_3 = get_temp_wire()  # a3 & b3
+
+    gates.extend(
+        [
+            Gate("pp3_0", GateType.AND, [a0, b3], pp3_0),
+            Gate("pp3_1", GateType.AND, [a1, b3], pp3_1),
+            Gate("pp3_2", GateType.AND, [a2, b3], pp3_2),
+            Gate("pp3_3", GateType.AND, [a3, b3], pp3_3),
+        ]
+    )
+
+    # Full adder implementation
+    def create_full_adder(a_wire, b_wire, cin_wire, sum_wire, cout_wire, gate_prefix):
+        """Create a full adder using basic gates"""
+        temp1 = get_temp_wire()
+        temp2 = get_temp_wire()
+        temp3 = get_temp_wire()
+        temp4 = get_temp_wire()
+
+        gates.extend(
+            [
+                Gate(f"{gate_prefix}_xor1", GateType.XOR, [a_wire, b_wire], temp1),
+                Gate(f"{gate_prefix}_xor2", GateType.XOR, [temp1, cin_wire], sum_wire),
+                Gate(f"{gate_prefix}_and1", GateType.AND, [a_wire, b_wire], temp2),
+                Gate(f"{gate_prefix}_and2", GateType.AND, [temp1, cin_wire], temp3),
+                Gate(f"{gate_prefix}_or", GateType.OR, [temp2, temp3], cout_wire),
+            ]
+        )
+
+        return cout_wire
+
+    # Ground wire (always 0) for initial carry
+    ground = Wire("ground")
+    gates.append(Gate("ground_gate", GateType.AND, [a0, Wire("ground_input")], ground))
+    # We need to add ground_input to alice's inputs and set it to False
+    ground_input = Wire("ground_input")
+
+    # Add partial products layer by layer
+
+    # First layer: pp0 + pp1 (shifted)
+    # Result bit 0 is just pp0_0
+    # We'll store intermediate results in layer1_x wires
+
+    # Bit 0: just pp0_0
+    # Copy pp0_0 to p0
+    gates.append(Gate("p0_copy", GateType.OR, [pp0_0, ground], p0))
+
+    # Bit 1: pp0_1 + pp1_0
+    carry1_1 = get_temp_wire()
+    layer1_1 = get_temp_wire()
+    create_full_adder(pp0_1, pp1_0, ground, layer1_1, carry1_1, "add1_1")
+
+    # Bit 2: pp0_2 + pp1_1 + carry
+    carry1_2 = get_temp_wire()
+    layer1_2 = get_temp_wire()
+    create_full_adder(pp0_2, pp1_1, carry1_1, layer1_2, carry1_2, "add1_2")
+
+    # Bit 3: pp0_3 + pp1_2 + carry
+    carry1_3 = get_temp_wire()
+    layer1_3 = get_temp_wire()
+    create_full_adder(pp0_3, pp1_2, carry1_2, layer1_3, carry1_3, "add1_3")
+
+    # Bit 4: pp1_3 + carry
+    layer1_4 = get_temp_wire()
+    gates.append(Gate("layer1_4", GateType.XOR, [pp1_3, carry1_3], layer1_4))
+    carry1_4 = get_temp_wire()
+    gates.append(Gate("carry1_4", GateType.AND, [pp1_3, carry1_3], carry1_4))
+
+    # Second layer: layer1 + pp2 (shifted by 2)
+    # Bit 1 stays the same
+    gates.append(Gate("p1_copy", GateType.OR, [layer1_1, ground], p1))
+
+    # Bit 2: layer1_2 + pp2_0
+    carry2_2 = get_temp_wire()
+    layer2_2 = get_temp_wire()
+    create_full_adder(layer1_2, pp2_0, ground, layer2_2, carry2_2, "add2_2")
+
+    # Bit 3: layer1_3 + pp2_1 + carry
+    carry2_3 = get_temp_wire()
+    layer2_3 = get_temp_wire()
+    create_full_adder(layer1_3, pp2_1, carry2_2, layer2_3, carry2_3, "add2_3")
+
+    # Bit 4: layer1_4 + pp2_2 + carry
+    carry2_4 = get_temp_wire()
+    layer2_4 = get_temp_wire()
+    create_full_adder(layer1_4, pp2_2, carry2_3, layer2_4, carry2_4, "add2_4")
+
+    # Bit 5: carry1_4 + pp2_3 + carry2_4
+    carry2_5 = get_temp_wire()
+    layer2_5 = get_temp_wire()
+    create_full_adder(carry1_4, pp2_3, carry2_4, layer2_5, carry2_5, "add2_5")
+
+    # Third layer: layer2 + pp3 (shifted by 3)
+    # Bit 2 stays the same
+    gates.append(Gate("p2_copy", GateType.OR, [layer2_2, ground], p2))
+
+    # Bit 3: layer2_3 + pp3_0
+    carry3_3 = get_temp_wire()
+    create_full_adder(layer2_3, pp3_0, ground, p3, carry3_3, "add3_3")
+
+    # Bit 4: layer2_4 + pp3_1 + carry
+    carry3_4 = get_temp_wire()
+    create_full_adder(layer2_4, pp3_1, carry3_3, p4, carry3_4, "add3_4")
+
+    # Bit 5: layer2_5 + pp3_2 + carry
+    carry3_5 = get_temp_wire()
+    create_full_adder(layer2_5, pp3_2, carry3_4, p5, carry3_5, "add3_5")
+
+    # Bit 6: carry2_5 + pp3_3 + carry3_5
+    carry3_6 = get_temp_wire()
+    create_full_adder(carry2_5, pp3_3, carry3_5, p6, carry3_6, "add3_6")
+
+    # Bit 7: just the final carry
+    gates.append(Gate("p7_copy", GateType.OR, [carry3_6, ground], p7))
+
+    return Circuit(
+        gates=gates,
+        input_wires=[a3, a2, a1, a0, b3, b2, b1, b0, ground_input],
+        output_wires=[p7, p6, p5, p4, p3, p2, p1, p0],
+        alice_input_wires=[
+            a3,
+            a2,
+            a1,
+            a0,
+            ground_input,
+        ],  # Alice also provides ground (False)
+        bob_input_wires=[b3, b2, b1, b0],
+    )
+
+
+def test_8bit_multiplication():
+    """
+    Test the 8-bit multiplication circuit with some example values.
+    """
+    print("\n--- Example 3: 4-bit Multiplication Circuit ---")
+    print("Computing: Alice's 4-bit number × Bob's 4-bit number")
+
+    circuit = create_8bit_multiplication_circuit()
+    alice = Sender(circuit)
+    bob = Receiver()
+    alice.connect_to_receiver(bob)
+
+    # Test case: 5 × 3 = 15
+    # Alice has 5 (binary: 0101)
+    # Bob has 3 (binary: 0011)
+    # Expected result: 15 (binary: 00001111)
+
+    alice_inputs = {
+        Wire("alice_bit_3"): False,  # MSB
+        Wire("alice_bit_2"): True,
+        Wire("alice_bit_1"): False,
+        Wire("alice_bit_0"): True,  # LSB
+        Wire("ground_input"): False,  # Ground
+    }
+
+    bob_inputs = {
+        Wire("bob_bit_3"): False,  # MSB
+        Wire("bob_bit_2"): False,
+        Wire("bob_bit_1"): True,
+        Wire("bob_bit_0"): True,  # LSB
+    }
+
+    print(f"Alice's number: 5 (binary: 0101)")
+    print(f"Bob's number: 3 (binary: 0011)")
+    print(f"Expected result: 15 (binary: 00001111)")
+
+    result = alice.run_protocol(alice_inputs, bob_inputs)
+
+    # Convert result to binary string for display
+    binary_result = ""
+    for i in range(8):
+        wire = Wire(f"product_bit_{7-i}")
+        binary_result += "1" if result[wire] else "0"
+
+    decimal_result = int(binary_result, 2)
+    print(f"Actual result: {decimal_result} (binary: {binary_result})")
+    print(f"Correct: {decimal_result == 15}")
+
+    print(f"Circuit complexity: {len(circuit.gates)} gates")
+
+
 # ================== DEMONSTRATION ==================
 
 
@@ -809,6 +1085,9 @@ def demonstrate_protocol():
     output_wire = circuit.output_wires[0]
     print(f"Result (Alice >= Bob): {result[output_wire]}")
 
+    # Example 3: Complex multiplication circuit
+    test_8bit_multiplication()
+
     print("\n" + "=" * 70)
     print("PROTOCOL EXECUTION COMPLETE")
     print("=" * 70)
@@ -817,6 +1096,7 @@ def demonstrate_protocol():
     print("2. Alice learned nothing about Bob's input")
     print("3. The computation was performed on encrypted (garbled) data")
     print("4. Only the final result was revealed")
+    print("5. Complex arithmetic operations can be performed securely")
 
 
 if __name__ == "__main__":
