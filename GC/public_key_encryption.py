@@ -1,147 +1,214 @@
+"""
+Public Key Encryption Module
+
+This module provides a clean interface for RSA public key encryption operations.
+It handles key generation, encryption, decryption, and key serialization.
+
+The design philosophy here is to hide the complexity of the underlying cryptography
+library while providing a simple, safe interface for users.
+"""
+
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.backends import default_backend
 
 
-def generate_key_pair():
+class PublicKeyEncryption:
     """
-    Generate a new RSA key pair.
-    Returns both private and public keys.
+    A wrapper class that simplifies RSA public key encryption operations.
+
+    This class encapsulates all the details about padding schemes, hash algorithms,
+    and key formats, so users don't need to worry about these cryptographic details.
     """
-    # Generate a private key with 2048-bit key size
-    # 65537 is a commonly used public exponent (it's prime and efficient)
-    private_key = rsa.generate_private_key(
-        public_exponent=65537, key_size=2048, backend=default_backend()
-    )
 
-    # The public key is derived from the private key
-    public_key = private_key.public_key()
+    def __init__(self, key_size=2048):
+        """
+        Initialize the encryption system.
 
-    return private_key, public_key
+        Args:
+            key_size (int): The size of RSA keys to generate. 2048 is currently
+                           considered secure for most applications.
+        """
+        self.key_size = key_size
+        self.backend = default_backend()
 
+    def generate_keypair(self):
+        """
+        Generate a new RSA key pair.
 
-def encrypt_message(message, public_key):
-    """
-    Encrypt a message using the public key.
-    Uses OAEP padding for security.
-    """
-    # Convert string to bytes if necessary
-    if isinstance(message, str):
-        message = message.encode("utf-8")
+        Returns:
+            tuple: (private_key, public_key) where both are cryptography objects
 
-    # Encrypt using OAEP padding with SHA-256
-    # OAEP (Optimal Asymmetric Encryption Padding) adds randomness for security
-    ciphertext = public_key.encrypt(
-        message,
-        padding.OAEP(
-            mgf=padding.MGF1(algorithm=hashes.SHA256()),  # Mask Generation Function
-            algorithm=hashes.SHA256(),  # Hash algorithm
-            label=None,  # Optional label (rarely used)
-        ),
-    )
+        The public exponent 65537 is used because it's prime, relatively small
+        (which makes encryption faster), and has become the de facto standard.
+        """
+        private_key = rsa.generate_private_key(
+            public_exponent=65537, key_size=self.key_size, backend=self.backend
+        )
+        public_key = private_key.public_key()
+        return private_key, public_key
 
-    return ciphertext
+    def encrypt(self, message, public_key):
+        """
+        Encrypt a message using a public key.
 
+        Args:
+            message (str or bytes): The message to encrypt
+            public_key: The recipient's public key
 
-def decrypt_message(ciphertext, private_key):
-    """
-    Decrypt a message using the private key.
-    Must use the same padding scheme as encryption.
-    """
-    # Decrypt using the same OAEP padding configuration
-    plaintext = private_key.decrypt(
-        ciphertext,
-        padding.OAEP(
-            mgf=padding.MGF1(algorithm=hashes.SHA256()),
-            algorithm=hashes.SHA256(),
-            label=None,
-        ),
-    )
+        Returns:
+            bytes: The encrypted ciphertext
 
-    # Convert bytes back to string
-    return plaintext.decode("utf-8")
+        Note: We use OAEP padding because it provides semantic security,
+        meaning the same message encrypted twice will produce different ciphertexts.
+        """
+        # Convert string to bytes if necessary - this makes our interface flexible
+        if isinstance(message, str):
+            message = message.encode("utf-8")
 
+        # OAEP with SHA-256 is currently considered the gold standard for RSA encryption
+        ciphertext = public_key.encrypt(
+            message,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None,
+            ),
+        )
+        return ciphertext
 
-def save_keys_to_files(private_key, public_key):
-    """
-    Save keys to files for later use.
-    Keys are serialized in PEM format for portability.
-    """
-    # Serialize private key (keep this secret!)
-    private_pem = private_key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),  # For simplicity, no password
-    )
+    def decrypt(self, ciphertext, private_key):
+        """
+        Decrypt a message using a private key.
 
-    # Serialize public key (safe to share)
-    public_pem = public_key.public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    )
+        Args:
+            ciphertext (bytes): The encrypted message
+            private_key: The private key for decryption
 
-    # Save to files
-    with open("private_key.pem", "wb") as f:
-        f.write(private_pem)
+        Returns:
+            str: The decrypted message as a string
 
-    with open("public_key.pem", "wb") as f:
-        f.write(public_pem)
+        Raises:
+            ValueError: If decryption fails (wrong key, corrupted data, etc.)
+        """
+        try:
+            # Use the same padding scheme as encryption - this is critical!
+            plaintext = private_key.decrypt(
+                ciphertext,
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None,
+                ),
+            )
+            return plaintext.decode("utf-8")
+        except Exception as e:
+            # Wrap the cryptography library's exceptions in something more user-friendly
+            raise ValueError(f"Decryption failed: {str(e)}")
 
-    print("Keys saved to private_key.pem and public_key.pem")
+    def serialize_private_key(self, private_key, password=None):
+        """
+        Convert a private key to PEM format for storage.
 
+        Args:
+            private_key: The private key to serialize
+            password (bytes, optional): Password to encrypt the key file
 
-def load_keys_from_files():
-    """
-    Load previously saved keys from files.
-    """
-    # Load private key
-    with open("private_key.pem", "rb") as f:
-        private_key = serialization.load_pem_private_key(
-            f.read(), password=None, backend=default_backend()  # No password was used
+        Returns:
+            bytes: The serialized key in PEM format
+        """
+        # Choose encryption algorithm based on whether password is provided
+        if password is not None:
+            encryption_algorithm = serialization.BestAvailableEncryption(password)
+        else:
+            encryption_algorithm = serialization.NoEncryption()
+
+        return private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=encryption_algorithm,
         )
 
-    # Load public key
-    with open("public_key.pem", "rb") as f:
-        public_key = serialization.load_pem_public_key(
-            f.read(), backend=default_backend()
+    def serialize_public_key(self, public_key):
+        """
+        Convert a public key to PEM format for storage or transmission.
+
+        Args:
+            public_key: The public key to serialize
+
+        Returns:
+            bytes: The serialized key in PEM format
+        """
+        return public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
         )
 
-    return private_key, public_key
+    def load_private_key(self, pem_data, password=None):
+        """
+        Load a private key from PEM format.
+
+        Args:
+            pem_data (bytes): The PEM-encoded private key
+            password (bytes, optional): Password if the key is encrypted
+
+        Returns:
+            Private key object
+        """
+        return serialization.load_pem_private_key(
+            pem_data, password=password, backend=self.backend
+        )
+
+    def load_public_key(self, pem_data):
+        """
+        Load a public key from PEM format.
+
+        Args:
+            pem_data (bytes): The PEM-encoded public key
+
+        Returns:
+            Public key object
+        """
+        return serialization.load_pem_public_key(pem_data, backend=self.backend)
+
+    def create_dummy_public_key(self):
+        """
+        Generate a public key without keeping the corresponding private key.
+
+        This is useful for protocols like oblivious transfer where you need
+        a "fake" key that looks legitimate but can't actually decrypt anything.
+
+        Returns:
+            Public key object (with no accessible private key)
+        """
+        # Generate a temporary key pair
+        temp_private, temp_public = self.generate_keypair()
+
+        # Return only the public key - the private key goes out of scope
+        # and becomes inaccessible
+        return temp_public
 
 
-# Demonstration of the complete process
-def main():
-    # Step 1: Generate key pair
-    print("Generating RSA key pair...")
-    private_key, public_key = generate_key_pair()
-
-    # Step 2: Save keys (optional - for reuse later)
-    save_keys_to_files(private_key, public_key)
-
-    # Step 3: Encrypt a message
-    original_message = "Hello! This is a secret message that needs encryption."
-    print(f"Original message: {original_message}")
-
-    encrypted_data = encrypt_message(original_message, public_key)
-    print(f"Encrypted data (first 50 chars): {encrypted_data[:50]}...")
-
-    # Step 4: Decrypt the message
-    decrypted_message = decrypt_message(encrypted_data, private_key)
-    print(f"Decrypted message: {decrypted_message}")
-
-    # Verify they match
-    print(f"Messages match: {original_message == decrypted_message}")
-
-    # Demonstrate loading keys from files
-    print("\nTesting key loading from files...")
-    loaded_private, loaded_public = load_keys_from_files()
-
-    # Test with loaded keys
-    test_message = "Testing with loaded keys!"
-    encrypted_with_loaded = encrypt_message(test_message, loaded_public)
-    decrypted_with_loaded = decrypt_message(encrypted_with_loaded, loaded_private)
-    print(f"Test with loaded keys successful: {test_message == decrypted_with_loaded}")
+# Convenience functions for quick operations
+def quick_encrypt(message, public_key):
+    """
+    Convenience function for one-off encryption operations.
+    """
+    pke = PublicKeyEncryption()
+    return pke.encrypt(message, public_key)
 
 
-if __name__ == "__main__":
-    main()
+def quick_decrypt(ciphertext, private_key):
+    """
+    Convenience function for one-off decryption operations.
+    """
+    pke = PublicKeyEncryption()
+    return pke.decrypt(ciphertext, private_key)
+
+
+def quick_keygen():
+    """
+    Convenience function to quickly generate a key pair.
+    """
+    pke = PublicKeyEncryption()
+    return pke.generate_keypair()
