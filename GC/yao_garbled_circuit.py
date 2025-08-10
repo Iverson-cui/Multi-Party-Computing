@@ -384,29 +384,118 @@ class Sender:
         print(f"[Sender] Circuit garbled successfully with {len(garbled_gates)} gates")
         return self.garbled_circuit
 
+    # def _garble_gate(self, gate: Gate) -> GarbledGate:
+    #     """
+    #     Garble a single gate by encrypting its truth table.
+
+    #     The key insight: we encrypt each truth table entry with the
+    #     concatenation of input labels as the key. Only someone with
+    #     the correct input labels can decrypt the correct output label.
+    #     """
+
+    #     # # For gates that need garbling, ensure labels have permutation bits
+    #     # if gate.gate_type != GateType.INPUT:
+    #     #     self._ensure_permutation_bits(gate)
+
+    #     # garbled_table either contains 2 lines or 4 lines depending on the class of gate.
+    #     garbled_table = []
+
+    #     if gate.gate_type == GateType.INPUT:
+    #         # Input gates don't need garbling
+    #         return GarbledGate(gate=gate, garbled_table=[])
+
+    #     # For each possible input combination
+    #     if gate.gate_type == GateType.NOT:
+    #         # NOT gate has one input
+    #         for input_val in [False, True]:
+    #             # For the selected input_val, input_label contains corresponding the encrypted value for this input_val.
+    #             input_label = self.garbled_wires[gate.input_wires[0]].get_label(
+    #                 input_val
+    #             )
+    #             output_val = not input_val
+    #             output_label = self.garbled_wires[gate.output_wire].get_label(
+    #                 output_val
+    #             )
+
+    #             # Encrypt output label with input label as key
+    #             encrypted_entry = CryptoUtils.OTP_encrypt(
+    #                 input_label, output_label + b"right"
+    #             )
+    #             garbled_table.append(encrypted_entry)
+    #     else:
+    #         # Binary gates (AND, OR, XOR) have two inputs
+    #         for input_val_0 in [False, True]:
+    #             for input_val_1 in [False, True]:
+    #                 # Get input labels
+    #                 label_0 = self.garbled_wires[gate.input_wires[0]].get_label(
+    #                     input_val_0
+    #                 )
+    #                 label_1 = self.garbled_wires[gate.input_wires[1]].get_label(
+    #                     input_val_1
+    #                 )
+
+    #                 # Compute gate output
+    #                 inputs = {
+    #                     gate.input_wires[0]: input_val_0,
+    #                     gate.input_wires[1]: input_val_1,
+    #                 }
+    #                 output_val = gate.evaluate(inputs)
+    #                 output_label = self.garbled_wires[gate.output_wire].get_label(
+    #                     output_val
+    #                 )
+
+    #                 # Encrypt output label with concatenated input labels
+    #                 # encrypt output key with 2 input keys. We concatenate 2 input keys together.
+    #                 key = label_0 + label_1
+    #                 encrypted_entry = CryptoUtils.OTP_encrypt(
+    #                     key, output_label + b"right"
+    #                 )
+    #                 garbled_table.append(encrypted_entry)
+
+    #     # IMPORTANT: In a real implementation, we would shuffle the garbled table
+    #     # to prevent position-based information leakage
+    #     # TODO: implement point and permute.
+    #     secrets.SystemRandom().shuffle(garbled_table)
+
+    #     return GarbledGate(gate=gate, garbled_table=garbled_table)
+
     def _garble_gate(self, gate: Gate) -> GarbledGate:
         """
-        Garble a single gate by encrypting its truth table.
+        Garble a single gate by encrypting its truth table with point-and-permute optimization.
 
-        The key insight: we encrypt each truth table entry with the
-        concatenation of input labels as the key. Only someone with
-        the correct input labels can decrypt the correct output label.
+        Point-and-permute works by:
+        1. Appending a random permutation bit to each label
+        2. Using these bits to determine table entry positions
+        3. Eliminating the need for trial decryption
+
+        All of the gate input and output labels are already appended with permutation bits. In this function we output garbled tables.
         """
-        # garbled_table either contains 2 lines or 4 lines depending on the class of gate.
+        # For gates that need garbling, ensure labels have permutation bits
+        if gate.gate_type != GateType.INPUT:
+            self._add_and_ensure_permutation_bits(gate)
+
         garbled_table = []
 
         if gate.gate_type == GateType.INPUT:
             # Input gates don't need garbling
             return GarbledGate(gate=gate, garbled_table=[])
 
-        # For each possible input combination
+        # For each possible input combination, create table entries
         if gate.gate_type == GateType.NOT:
-            # NOT gate has one input
+            # NOT gate has one input - create 2 entries
+            # Entry 0: for input label ending with 0
+            # Entry 1: for input label ending with 1
+
+            table_entries = [None, None]  # Initialize table with 2 positions
+
             for input_val in [False, True]:
-                # For the selected input_val, input_label contains corresponding the encrypted value for this input_val.
-                input_label = self.garbled_wires[gate.input_wires[0]].get_label(
-                    input_val
-                )
+                garbled_wire = self.garbled_wires[gate.input_wires[0]]
+                input_label = garbled_wire.get_label(input_val)
+
+                # Get the permutation bit (last bit of the label)
+                perm_bit = input_label[-1] & 1
+
+                # Compute gate output
                 output_val = not input_val
                 output_label = self.garbled_wires[gate.output_wire].get_label(
                     output_val
@@ -414,20 +503,42 @@ class Sender:
 
                 # Encrypt output label with input label as key
                 encrypted_entry = CryptoUtils.OTP_encrypt(
-                    input_label, output_label + b"right"
+                    input_label[:-1],  # Use label without permutation bit as key
+                    output_label + b"right",
                 )
-                garbled_table.append(encrypted_entry)
+                # TODO: decryption still need to remove last bit
+                # Place entry at position determined by permutation bit
+                table_entries[perm_bit] = encrypted_entry
+
+            garbled_table = table_entries
+
         else:
-            # Binary gates (AND, OR, XOR) have two inputs
+            # Binary gates (AND, OR, XOR) have two inputs - create 4 entries
+            # Entry position = (perm_bit_0 << 1) | perm_bit_1
+            # 00 -> position 0, 01 -> position 1, 10 -> position 2, 11 -> position 3
+
+            table_entries = [
+                None,
+                None,
+                None,
+                None,
+            ]  # Initialize table with 4 positions
+
             for input_val_0 in [False, True]:
                 for input_val_1 in [False, True]:
                     # Get input labels
-                    label_0 = self.garbled_wires[gate.input_wires[0]].get_label(
-                        input_val_0
-                    )
-                    label_1 = self.garbled_wires[gate.input_wires[1]].get_label(
-                        input_val_1
-                    )
+                    garbled_wire_0 = self.garbled_wires[gate.input_wires[0]]
+                    garbled_wire_1 = self.garbled_wires[gate.input_wires[1]]
+
+                    label_0 = garbled_wire_0.get_label(input_val_0)
+                    label_1 = garbled_wire_1.get_label(input_val_1)
+
+                    # Get permutation bits (last bit of each label)
+                    perm_bit_0 = label_0[-1] & 1
+                    perm_bit_1 = label_1[-1] & 1
+
+                    # Calculate table position
+                    position = (perm_bit_0 << 1) | perm_bit_1
 
                     # Compute gate output
                     inputs = {
@@ -439,20 +550,69 @@ class Sender:
                         output_val
                     )
 
-                    # Encrypt output label with concatenated input labels
-                    # encrypt output key with 2 input keys. We concatenate 2 input keys together.
-                    key = label_0 + label_1
+                    # Encrypt output label with concatenated input labels (without perm bits)
+                    key = (
+                        label_0[:-1] + label_1[:-1]
+                    )  # Remove permutation bits from key
                     encrypted_entry = CryptoUtils.OTP_encrypt(
                         key, output_label + b"right"
                     )
-                    garbled_table.append(encrypted_entry)
 
-        # IMPORTANT: In a real implementation, we would shuffle the garbled table
-        # to prevent position-based information leakage
-        # TODO: implement point and permute.
-        secrets.SystemRandom().shuffle(garbled_table)
+                    # Place entry at calculated position
+                    table_entries[position] = encrypted_entry
+
+            garbled_table = table_entries
 
         return GarbledGate(gate=gate, garbled_table=garbled_table)
+
+    def _add_and_ensure_permutation_bits(self, gate: Gate):
+        """
+        Ensure all wires connected to this gate have labels with permutation bits.
+        Each wire should have one label ending with 0 and another ending with 1.
+        This is done by appending a bit to the end of each label.
+
+        If input wire labels don't have permutation bits, add; if they do, do nothing.
+        The reason that there may be labels already with permutation bits is that we are processing both input and output labels of the gate. Output labels may be the input labels for another gates.
+
+        But circuit output wire labels still have these bits.
+        #TODO: output label logic.
+        """
+        # Check all wires connected to this gate
+        wires_to_check = gate.input_wires + [gate.output_wire]
+
+        for wire in wires_to_check:
+            if wire in self.garbled_wires:
+                garbled_wire = self.garbled_wires[wire]
+
+                # Check if labels already have permutation bits (length should be 17 bytes)
+                if len(garbled_wire.label_0) == 16:  # Original 16-byte label
+                    # Randomly assign permutation bits to ensure they're different
+                    # Generate a random bit for label_0
+                    perm_bit_0 = secrets.randbelow(2)  # 0 or 1
+                    perm_bit_1 = 1 - perm_bit_0  # Opposite bit
+                    # Append the random permutation bits
+                    garbled_wire.label_0 = garbled_wire.label_0 + bytes([perm_bit_0])
+                    garbled_wire.label_1 = garbled_wire.label_1 + bytes([perm_bit_1])
+                elif len(garbled_wire.label_0) == 17:  # Already has permutation bits
+                    # Check if they have different permutation bits
+                    label_0_bit = garbled_wire.label_0[-1] & 1
+                    label_1_bit = garbled_wire.label_1[-1] & 1
+
+                    # If both labels have the same permutation bit, fix one of them
+                    if label_0_bit == label_1_bit:
+                        # Randomly choose which label to flip
+                        if secrets.randbelow(2) == 0:
+                            # Flip label_0's permutation bit
+                            new_bit = 1 - label_0_bit
+                            garbled_wire.label_0 = garbled_wire.label_0[:-1] + bytes(
+                                [new_bit]
+                            )
+                        else:
+                            # Flip label_1's permutation bit
+                            new_bit = 1 - label_1_bit
+                            garbled_wire.label_1 = garbled_wire.label_1[:-1] + bytes(
+                                [new_bit]
+                            )
 
     def send_garbled_circuit(self):
         """Phase 2: Send the garbled circuit to the Receiver."""
@@ -628,47 +788,46 @@ class Receiver:
         if gate.gate_type == GateType.NOT:
             # NOT gate: single input
             input_label = wire_labels[gate.input_wires[0]]
+            # Get permutation bit to determine table position
+            perm_bit = input_label[-1] & 1
 
-            # Try to decrypt each entry
-            for encrypted_entry in garbled_gate.garbled_table:
-                try:
-                    output_label = CryptoUtils.OTP_decrypt(input_label, encrypted_entry)
-                    # In a real implementation, we'd verify this is a valid label
-                    # using a MAC or by checking label format
-                    # Validate the decrypted label
-                    if (
-                        len(output_label) == 21
-                        and isinstance(output_label, bytes)
-                        and output_label.endswith(b"right")
-                    ):
-                        return output_label[:16]
-                    else:
-                        continue  # Invalid format, try next entry
-                except Exception:
-                    continue
+            # Decrypt the entry at the determined position
+            encrypted_entry = garbled_gate.garbled_table[perm_bit]
+            output_label = CryptoUtils.OTP_decrypt(
+                input_label[:-1],  # Use label without permutation bit as key
+                encrypted_entry,
+            )
+
+            # Validate and return the label
+            if len(output_label) == 22 and output_label.endswith(b"right"):
+                # What we want is 16 bits+ 1 perm bits
+                return output_label[:17]
+            else:
+                raise ValueError(f"Invalid decryption for gate {gate.gate_id}")
         else:
             # Binary gate: two inputs
             input_label_0 = wire_labels[gate.input_wires[0]]
             input_label_1 = wire_labels[gate.input_wires[1]]
-            key = input_label_0 + input_label_1
 
-            # Try to decrypt each entry
-            for encrypted_entry in garbled_gate.garbled_table:
-                try:
-                    output_label = CryptoUtils.OTP_decrypt(key, encrypted_entry)
-                    # In practice, we'd verify this decryption succeeded
-                    if (
-                        len(output_label) == 21
-                        and isinstance(output_label, bytes)
-                        and output_label.endswith(b"right")
-                    ):
-                        return output_label[:16]
-                    else:
-                        continue  # Invalid format, try next entry
-                except Exception:
-                    continue
+            # Get permutation bits
+            perm_bit_0 = input_label_0[-1] & 1
+            perm_bit_1 = input_label_1[-1] & 1
 
-        raise ValueError(f"Failed to evaluate gate {gate.gate_id}")
+            # Calculate table position
+            position = (perm_bit_0 << 1) | perm_bit_1
+
+            # Decrypt the entry at the determined position
+            key = (
+                input_label_0[:-1] + input_label_1[:-1]
+            )  # First 16 bytes of each label
+            encrypted_entry = garbled_gate.garbled_table[position]
+            output_label = CryptoUtils.OTP_decrypt(key, encrypted_entry)
+
+            # Validate and return the label (should be 22 bytes total: 17 + "right")
+            if len(output_label) == 22 and output_label.endswith(b"right"):
+                return output_label[:17]  # Return 17 bytes (16 + permutation bit)
+            else:
+                raise ValueError(f"Invalid decryption for gate {gate.gate_id}")
 
 
 # ================== EXAMPLE CIRCUITS ==================
@@ -1031,6 +1190,280 @@ def test_8bit_multiplication():
     print(f"Circuit complexity: {len(circuit.gates)} gates")
 
 
+def create_8bit_comparison_circuit() -> Circuit:
+    """
+    Create a circuit that compares two 8-bit numbers.
+    Returns TRUE if Alice's 8-bit number >= Bob's 8-bit number.
+
+    This circuit implements bit-by-bit comparison from MSB to LSB,
+    resulting in approximately 200 gates.
+
+    Alice has an 8-bit number: a7, a6, a5, a4, a3, a2, a1, a0
+    Bob has an 8-bit number: b7, b6, b5, b4, b3, b2, b1, b0
+    Output: TRUE if Alice's number >= Bob's number
+    """
+
+    # Alice's 8-bit input (most significant bit first)
+    a7 = Wire("alice_bit_7")  # MSB
+    a6 = Wire("alice_bit_6")
+    a5 = Wire("alice_bit_5")
+    a4 = Wire("alice_bit_4")
+    a3 = Wire("alice_bit_3")
+    a2 = Wire("alice_bit_2")
+    a1 = Wire("alice_bit_1")
+    a0 = Wire("alice_bit_0")  # LSB
+
+    # Bob's 8-bit input
+    b7 = Wire("bob_bit_7")  # MSB
+    b6 = Wire("bob_bit_6")
+    b5 = Wire("bob_bit_5")
+    b4 = Wire("bob_bit_4")
+    b3 = Wire("bob_bit_3")
+    b2 = Wire("bob_bit_2")
+    b1 = Wire("bob_bit_1")
+    b0 = Wire("bob_bit_0")  # LSB
+
+    # Output wire
+    output = Wire("comparison_output")
+
+    gates = []
+    wire_counter = 0
+
+    def get_temp_wire():
+        nonlocal wire_counter
+        wire = Wire(f"temp_{wire_counter}")
+        wire_counter += 1
+        return wire
+
+    # For each bit position i, we need to check:
+    # 1. Is ai > bi? (ai AND NOT bi)
+    # 2. Are ai and bi equal? (NOT (ai XOR bi))
+    # 3. Continue to next bit only if all higher bits are equal
+
+    # We'll build the comparison from MSB to LSB
+    # greater[i] = (a[i] > b[i]) OR (a[i] == b[i] AND greater[i-1])
+    # equal[i] = (a[i] == b[i]) AND equal[i-1]
+
+    alice_bits = [a7, a6, a5, a4, a3, a2, a1, a0]
+    bob_bits = [b7, b6, b5, b4, b3, b2, b1, b0]
+
+    # For each bit position, create comparison logic
+    greater_wires = []  # greater[i] = Alice > Bob at position i or higher
+    equal_wires = []  # equal[i] = Alice == Bob from MSB down to position i
+
+    # Ground wire for initial conditions
+    ground = Wire("ground")
+    one = Wire("one")
+    gates.extend(
+        [
+            Gate("ground_gate", GateType.AND, [a0, Wire("ground_input")], ground),
+            Gate("one_gate", GateType.OR, [a0, Wire("one_input")], one),
+        ]
+    )
+    ground_input = Wire("ground_input")  # Will be set to False
+    one_input = Wire("one_input")  # Will be set to True
+
+    for i in range(8):  # From MSB (7) to LSB (0)
+        ai = alice_bits[i]
+        bi = bob_bits[i]
+
+        # NOT bi
+        not_bi = get_temp_wire()
+        gates.append(Gate(f"not_b{7-i}", GateType.NOT, [bi], not_bi))
+
+        # ai > bi: ai AND NOT bi
+        ai_greater_bi = get_temp_wire()
+        gates.append(
+            Gate(f"a{7-i}_gt_b{7-i}", GateType.AND, [ai, not_bi], ai_greater_bi)
+        )
+
+        # ai == bi: NOT (ai XOR bi)
+        ai_xor_bi = get_temp_wire()
+        ai_eq_bi = get_temp_wire()
+        gates.extend(
+            [
+                Gate(f"a{7-i}_xor_b{7-i}", GateType.XOR, [ai, bi], ai_xor_bi),
+                Gate(f"a{7-i}_eq_b{7-i}", GateType.NOT, [ai_xor_bi], ai_eq_bi),
+            ]
+        )
+
+        if i == 0:  # MSB
+            # For MSB: greater = (a7 > b7), equal = (a7 == b7)
+            greater_wires.append(ai_greater_bi)
+            equal_wires.append(ai_eq_bi)
+        else:
+            # For other bits:
+            # greater[i] = (ai > bi) OR (ai == bi AND greater[i-1])
+            # equal[i] = (ai == bi) AND equal[i-1]
+
+            prev_greater = greater_wires[i - 1]
+            prev_equal = equal_wires[i - 1]
+
+            # ai == bi AND greater[i-1]
+            eq_and_prev_greater = get_temp_wire()
+            gates.append(
+                Gate(
+                    f"eq{7-i}_and_prev_gt",
+                    GateType.AND,
+                    [ai_eq_bi, prev_greater],
+                    eq_and_prev_greater,
+                )
+            )
+
+            # (ai > bi) OR (ai == bi AND greater[i-1])
+            current_greater = get_temp_wire()
+            gates.append(
+                Gate(
+                    f"greater_{7-i}",
+                    GateType.OR,
+                    [ai_greater_bi, eq_and_prev_greater],
+                    current_greater,
+                )
+            )
+            greater_wires.append(current_greater)
+
+            # ai == bi AND equal[i-1]
+            current_equal = get_temp_wire()
+            gates.append(
+                Gate(
+                    f"equal_{7-i}", GateType.AND, [ai_eq_bi, prev_equal], current_equal
+                )
+            )
+            equal_wires.append(current_equal)
+
+    # Final result: Alice >= Bob means either Alice > Bob OR Alice == Bob
+    # greater_or_equal = greater[7] OR equal[7]
+    final_greater = greater_wires[-1]  # greater considering all bits
+    final_equal = equal_wires[-1]  # equal in all bits
+
+    gates.append(
+        Gate("final_comparison", GateType.OR, [final_greater, final_equal], output)
+    )
+
+    return Circuit(
+        gates=gates,
+        input_wires=[
+            a7,
+            a6,
+            a5,
+            a4,
+            a3,
+            a2,
+            a1,
+            a0,
+            b7,
+            b6,
+            b5,
+            b4,
+            b3,
+            b2,
+            b1,
+            b0,
+            ground_input,
+            one_input,
+        ],
+        output_wires=[output],
+        alice_input_wires=[a7, a6, a5, a4, a3, a2, a1, a0, ground_input, one_input],
+        bob_input_wires=[b7, b6, b5, b4, b3, b2, b1, b0],
+    )
+
+
+def test_8bit_comparison():
+    """
+    Test the 8-bit comparison circuit with some example values.
+    """
+    print("\n--- Example 4: 8-bit Comparison Circuit ---")
+    print("Computing: Is Alice's 8-bit number >= Bob's 8-bit number?")
+
+    circuit = create_8bit_comparison_circuit()
+    alice = Sender(circuit)
+    bob = Receiver()
+    alice.connect_to_receiver(bob)
+
+    # Test case: 150 >= 128
+    # Alice has 150 (binary: 10010110)
+    # Bob has 128 (binary: 10000000)
+    # Expected result: TRUE (150 >= 128)
+
+    alice_inputs = {
+        Wire("alice_bit_7"): True,  # MSB: 1
+        Wire("alice_bit_6"): False,  #      0
+        Wire("alice_bit_5"): False,  #      0
+        Wire("alice_bit_4"): True,  #      1
+        Wire("alice_bit_3"): False,  #      0
+        Wire("alice_bit_2"): True,  #      1
+        Wire("alice_bit_1"): True,  #      1
+        Wire("alice_bit_0"): False,  # LSB: 0
+        Wire("ground_input"): False,  # Ground
+        Wire("one_input"): True,  # One
+    }
+
+    bob_inputs = {
+        Wire("bob_bit_7"): True,  # MSB: 1
+        Wire("bob_bit_6"): False,  #      0
+        Wire("bob_bit_5"): False,  #      0
+        Wire("bob_bit_4"): False,  #      0
+        Wire("bob_bit_3"): False,  #      0
+        Wire("bob_bit_2"): False,  #      0
+        Wire("bob_bit_1"): False,  #      0
+        Wire("bob_bit_0"): False,  # LSB: 0
+    }
+
+    print(f"Alice's number: 150 (binary: 10010110)")
+    print(f"Bob's number: 128 (binary: 10000000)")
+    print(f"Expected result: TRUE (150 >= 128)")
+
+    result = alice.run_protocol(alice_inputs, bob_inputs)
+
+    output_wire = Wire("comparison_output")
+    actual_result = result[output_wire]
+    print(f"Actual result: {actual_result}")
+    print(f"Correct: {actual_result == True}")
+
+    print(f"Circuit complexity: {len(circuit.gates)} gates")
+
+    # Test another case: 100 >= 200 (should be FALSE)
+    print(f"\nSecond test: 100 >= 200")
+
+    alice_inputs_2 = {
+        Wire("alice_bit_7"): False,  # MSB: 0
+        Wire("alice_bit_6"): True,  #      1
+        Wire("alice_bit_5"): True,  #      1
+        Wire("alice_bit_4"): False,  #      0
+        Wire("alice_bit_3"): False,  #      0
+        Wire("alice_bit_2"): True,  #      1
+        Wire("alice_bit_1"): False,  #      0
+        Wire("alice_bit_0"): False,  # LSB: 0
+        Wire("ground_input"): False,  # Ground
+        Wire("one_input"): True,  # One
+    }
+
+    bob_inputs_2 = {
+        Wire("bob_bit_7"): True,  # MSB: 1
+        Wire("bob_bit_6"): True,  #      1
+        Wire("bob_bit_5"): False,  #      0
+        Wire("bob_bit_4"): False,  #      0
+        Wire("bob_bit_3"): True,  #      1
+        Wire("bob_bit_2"): False,  #      0
+        Wire("bob_bit_1"): False,  #      0
+        Wire("bob_bit_0"): False,  # LSB: 0
+    }
+
+    # Create new instances for second test
+    alice2 = Sender(circuit)
+    bob2 = Receiver()
+    alice2.connect_to_receiver(bob2)
+
+    print(f"Alice's number: 100 (binary: 01100100)")
+    print(f"Bob's number: 200 (binary: 11001000)")
+    print(f"Expected result: FALSE (100 < 200)")
+
+    result2 = alice2.run_protocol(alice_inputs_2, bob_inputs_2)
+    actual_result2 = result2[output_wire]
+    print(f"Actual result: {actual_result2}")
+    print(f"Correct: {actual_result2 == False}")
+
+
 # ================== DEMONSTRATION ==================
 
 
@@ -1099,17 +1532,16 @@ def demonstrate_protocol():
     test_8bit_multiplication()
     mult_time = time.time() - mult_start_time
 
+    # Example 4: 8-bit comparison circuit
+    comp8_start_time = time.time()
+    test_8bit_comparison()
+    comp8_time = time.time() - comp8_start_time
+
     total_time = time.time() - total_start_time
 
     print("\n" + "=" * 70)
     print("PROTOCOL EXECUTION COMPLETE")
     print("=" * 70)
-    print("\nKey Properties Demonstrated:")
-    print("1. Bob learned the result without learning Alice's input")
-    print("2. Alice learned nothing about Bob's input")
-    print("3. The computation was performed on encrypted (garbled) data")
-    print("4. Only the final result was revealed")
-    print("5. Complex arithmetic operations can be performed securely")
 
     # Timing report
     print("\n" + "=" * 70)
@@ -1118,11 +1550,15 @@ def demonstrate_protocol():
     and_circuit = create_and_circuit()
     comp_circuit = create_comparison_circuit()
     mult_circuit = create_8bit_multiplication_circuit()
+    comp8_circuit = create_8bit_comparison_circuit()
 
     print(f"AND Circuit        : {and_time:.4f}s ({len(and_circuit.gates):3d} gates)")
     print(f"Comparison Circuit : {comp_time:.4f}s ({len(comp_circuit.gates):3d} gates)")
     print(
         f"Multiplication Circuit: {mult_time:.4f}s ({len(mult_circuit.gates):3d} gates)"
+    )
+    print(
+        f"8-bit Comparison      : {comp8_time:.4f}s ({len(comp8_circuit.gates):3d} gates)"
     )
     print(f"Total Time         : {total_time:.4f}s")
     print("=" * 70)
