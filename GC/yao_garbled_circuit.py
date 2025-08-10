@@ -15,6 +15,7 @@ The protocol works in several phases:
 import hashlib
 import secrets
 import json
+import time
 from enum import Enum
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
@@ -1041,6 +1042,8 @@ def demonstrate_protocol():
     print("YAO'S GARBLED CIRCUIT PROTOCOL DEMONSTRATION")
     print("=" * 70)
 
+    total_start_time = time.time()
+
     # Example 1: Simple AND circuit
     print("\n--- Example 1: Simple AND Circuit ---")
     print("Computing: alice_input AND bob_input")
@@ -1065,9 +1068,13 @@ def demonstrate_protocol():
     expected_result = {Wire("output"): True}
     print(f"Expected: {expected_result}")
 
+    and_time = time.time() - total_start_time
+
     # Example 2: Comparison circuit
     print("\n--- Example 2: 2-bit Comparison Circuit ---")
     print("Computing: Is Alice's 2-bit number >= Bob's 2-bit number?")
+
+    comp_start_time = time.time()
 
     circuit = create_comparison_circuit()
     alice = Sender(circuit)
@@ -1085,8 +1092,14 @@ def demonstrate_protocol():
     output_wire = circuit.output_wires[0]
     print(f"Result (Alice >= Bob): {result[output_wire]}")
 
+    comp_time = time.time() - comp_start_time
+
     # Example 3: Complex multiplication circuit
+    mult_start_time = time.time()
     test_8bit_multiplication()
+    mult_time = time.time() - mult_start_time
+
+    total_time = time.time() - total_start_time
 
     print("\n" + "=" * 70)
     print("PROTOCOL EXECUTION COMPLETE")
@@ -1097,6 +1110,22 @@ def demonstrate_protocol():
     print("3. The computation was performed on encrypted (garbled) data")
     print("4. Only the final result was revealed")
     print("5. Complex arithmetic operations can be performed securely")
+
+    # Timing report
+    print("\n" + "=" * 70)
+    print("TIMING REPORT")
+    print("=" * 70)
+    and_circuit = create_and_circuit()
+    comp_circuit = create_comparison_circuit()
+    mult_circuit = create_8bit_multiplication_circuit()
+
+    print(f"AND Circuit        : {and_time:.4f}s ({len(and_circuit.gates):3d} gates)")
+    print(f"Comparison Circuit : {comp_time:.4f}s ({len(comp_circuit.gates):3d} gates)")
+    print(
+        f"Multiplication Circuit: {mult_time:.4f}s ({len(mult_circuit.gates):3d} gates)"
+    )
+    print(f"Total Time         : {total_time:.4f}s")
+    print("=" * 70)
 
 
 if __name__ == "__main__":
