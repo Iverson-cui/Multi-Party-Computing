@@ -128,7 +128,8 @@ python yao_garbled_circuit.py
 This runs three examples:
 1. Simple AND circuit (2 inputs → 1 output)
 2. 2-bit number comparison (4 inputs → 1 output)  
-3. 4-bit multiplication (8 inputs → 8 outputs)
+3. 8-bit multiplication (8 inputs → 8 outputs)
+4. 8-bit comparison
 
 ### Creating Custom Circuits
 
@@ -176,12 +177,13 @@ pip install cryptography
 ## Educational Purpose
 
 This implementation prioritizes clarity and educational value over production-level optimizations. Real-world implementations would include:
-- Point-and-permute optimization for garbled tables
 - Free-XOR optimization for XOR gates
 - Network communication protocols
 - Protection against malicious adversaries
 - Hardware-specific optimizations
 
-## License
+## Further implementation
+- Point-and-permute optimization for garbled tables
 
+## License
 Educational implementation for cryptography coursework.
