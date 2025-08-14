@@ -10,6 +10,8 @@ This project implements the foundational protocol for secure multi-party computa
 - Both parties learn the final result
 - The computation is performed on encrypted data
 
+This GC uses **public-key**-based OT whose encryption and decryption is **RSA**. Details of RSA can be checked at `public_key_encryption.py`. 
+
 ## File Structure
 
 ### Core Implementation Files
