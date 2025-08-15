@@ -8,8 +8,11 @@ The protocol works by:
 3. Evaluating AND gates using 1-out-of-4 Oblivious Transfer
 4. Reconstructing the final output
 
-Key insight: AND gate evaluation uses the fact that:
-(a1 ⊕ a2) ∧ (b1 ⊕ b2) = (a1 ∧ b1) ⊕ (a1 ∧ b2) ⊕ (a2 ∧ b1) ⊕ (a2 ∧ b2)
+Key insight for AND gate evaluation:
+The sender (Party 2) chooses a random output share z2, then provides four OT values
+such that the chooser (Party 1) obtains z1 = z2 ⊕ ((x1 ⊕ x2) ∧ (y1 ⊕ y2)),
+where x1,y1 are Party 1's input shares and x2,y2 are Party 2's input shares.
+This ensures z1 ⊕ z2 = (x1 ⊕ x2) ∧ (y1 ⊕ y2), the correct AND result.
 """
 
 import sys
@@ -272,16 +275,17 @@ class GMWParty2:
 
     def provide_and_gate_ot_values(self, gate: GMWGate, party1_selection: int) -> bool:
         """
-        Provide OT values for AND gate evaluation.
+        Provide OT values for AND gate evaluation using the standard GMW approach.
 
-        We compute all 4 possible output combinations and let Party 1 choose
-        the one corresponding to their shares via OT.
+        Following the attachment's setting:
+        - The sender (Party 2) chooses a random output share z2
+        - The sender provides four inputs to the OT protocol such that
+          the chooser obtains z1 = z2 ⊕ ((x1 ⊕ x2) ∧ (y1 ⊕ y2))
 
-        The 4 combinations correspond to:
-        - 00: (False, False) -> output share
-        - 01: (False, True)  -> output share
-        - 10: (True, False)  -> output share
-        - 11: (True, True)   -> output share
+        Where:
+        - x1, y1 are Party 1's input shares (used for OT selection)
+        - x2, y2 are Party 2's input shares
+        - z1, z2 are the output shares such that z1 ⊕ z2 = (x1 ⊕ x2) ∧ (y1 ⊕ y2)
         """
         print(f"[Party 2] Providing OT values for AND gate: {gate.gate_id}")
 
@@ -301,27 +305,27 @@ class GMWParty2:
                             )
                         break
 
-        # Get our shares of the input wires
-        our_share_a = self.share_manager.get_share(gate.input_wires[0])
-        our_share_b = self.share_manager.get_share(
-            gate.input_wires[1]
-        )  # Compute all 4 possible output shares
-        # For each combination of Party 1's shares (a1, b1), compute the result
+        # Get our shares of the input wires (x2, y2)
+        x2 = self.share_manager.get_share(gate.input_wires[0])
+        y2 = self.share_manager.get_share(gate.input_wires[1])
+
+        # Choose a random output share z2 for Party 2
+        z2 = secrets.choice([True, False])
+
+        # Compute the 4 OT values for each possible combination of Party 1's shares (x1, y1)
+        # For each (x1, y1), we want to provide z1 = z2 ⊕ ((x1 ⊕ x2) ∧ (y1 ⊕ y2))
         ot_values = []
 
-        # TODO: This share logic need to be polished
-        for party1_a in [False, True]:
-            for party1_b in [False, True]:
-                # Compute: (party1_a ∧ party1_b) ⊕ (party1_a ∧ our_share_b) ⊕ (our_share_a ∧ party1_b) ⊕ (our_share_a ∧ our_share_b)
-                term1 = party1_a & party1_b
-                term2 = party1_a & our_share_b
-                term3 = our_share_a & party1_b
-                term4 = our_share_a & our_share_b
+        for x1 in [False, True]:
+            for y1 in [False, True]:
+                # Compute the actual AND result: (x1 ⊕ x2) ∧ (y1 ⊕ y2)
+                and_result = (x1 ^ x2) & (y1 ^ y2)
 
-                # Our share of the AND result
-                our_output_share = term1 ^ term2 ^ term3 ^ term4
-                ot_values.append(our_output_share)
+                # Compute Party 1's share: z1 = z2 ⊕ and_result
+                z1 = z2 ^ and_result
+                ot_values.append(z1)
 
+        print(f"[Party 2] Random output share z2: {z2}")
         print(f"[Party 2] OT values for AND gate: {ot_values}")
 
         # Perform 1-out-of-4 OT
@@ -338,11 +342,12 @@ class GMWParty2:
         # Convert back to boolean
         chosen_value = chosen_value_str == "True"
 
-        # Set our share of the output
-        self.share_manager.set_share(gate.output_wire, ot_values[party1_selection])
+        # Set our share of the output to the random z2
+        self.share_manager.set_share(gate.output_wire, z2)
 
+        print(f"[Party 2] AND gate {gate.gate_id} our share (z2): {z2}")
         print(
-            f"[Party 2] AND gate {gate.gate_id} our share: {ot_values[party1_selection]}"
+            f"[Party 1] AND gate {gate.gate_id} will receive share (z1): {chosen_value}"
         )
 
         return chosen_value
