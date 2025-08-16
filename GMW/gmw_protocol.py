@@ -848,109 +848,192 @@ def demonstrate_gmw_protocol():
         print(f"Circuit plaintext verification: {expected_circuit}")
 
 
-# def demonstrate_gmw_protocol():
-#     """Demonstrate the GMW protocol with various circuits."""
-#     print("=" * 70)
-#     print("GMW PROTOCOL DEMONSTRATION")
-#     print("=" * 70)
+def create_complex_boolean_circuit() -> GMWCircuit:
+    """
+    Create a complex Boolean circuit that combines multiple gate types:
+    f(a, b, c, d) = (NOT(a) AND b) XOR (c AND NOT(d))
 
-#     # Import circuit examples
-#     from gmw_circuit import (
-#         create_gmw_and_circuit,
-#         create_gmw_xor_circuit,
-#         create_gmw_adder_circuit,
-#     )
+    This circuit demonstrates:
+    - NOT gates for input negation
+    - AND gates for conjunction
+    - XOR gate for final combination
+    """
+    # Input wires
+    a = GMWWire("party1_a")
+    b = GMWWire("party1_b")
+    c = GMWWire("party2_c")
+    d = GMWWire("party2_d")
 
-#     # Example 1: Simple AND circuit
-#     print("\n--- Example 1: AND Circuit ---")
-#     print("Computing: party1_input AND party2_input")
+    # Intermediate wires
+    not_a = GMWWire("not_a")
+    not_d = GMWWire("not_d")
+    left_and = GMWWire("left_and")  # NOT(a) AND b
+    right_and = GMWWire("right_and")  # c AND NOT(d)
 
-#     circuit = create_gmw_and_circuit()
-#     protocol = GMWProtocol(circuit)
+    # Output wire
+    output = GMWWire("output")
 
-#     party1_inputs = {GMWWire("party1_input"): True}
-#     party2_inputs = {GMWWire("party2_input"): False}
+    gates = [
+        # Step 1: Compute NOT gates
+        GMWGate("not_gate_a", GMWGateType.NOT, [a], not_a),
+        GMWGate("not_gate_d", GMWGateType.NOT, [d], not_d),
+        # Step 2: Compute AND gates
+        GMWGate("and_left", GMWGateType.AND, [not_a, b], left_and),
+        GMWGate("and_right", GMWGateType.AND, [c, not_d], right_and),
+        # Step 3: Final XOR
+        GMWGate("final_xor", GMWGateType.XOR, [left_and, right_and], output),
+    ]
 
-#     print(f"Party 1 input: {party1_inputs}")
-#     print(f"Party 2 input: {party2_inputs}")
+    return GMWCircuit(
+        gates=gates,
+        input_wires=[a, b, c, d],
+        output_wires=[output],
+        party1_input_wires=[a, b],
+        party2_input_wires=[c, d],
+    )
 
-#     result = protocol.execute_protocol(party1_inputs, party2_inputs)
-#     expected = circuit.evaluate_plaintext({**party1_inputs, **party2_inputs})
 
-#     print(f"GMW result: {result}")
-#     print(f"Expected: {expected}")
-#     print(f"Correct: {result == expected}")
+def create_full_adder_circuit() -> GMWCircuit:
+    """
+    Create a full adder circuit that adds three bits: a + b + carry_in
+    Outputs: sum and carry_out
 
-#     # Example 2: XOR circuit
-#     print("\n--- Example 2: XOR Circuit ---")
-#     print("Computing: party1_input XOR party2_input")
+    Logic:
+    sum = a XOR b XOR carry_in
+    carry_out = (a AND b) OR (carry_in AND (a XOR b))
 
-#     circuit = create_gmw_xor_circuit()
-#     protocol = GMWProtocol(circuit)
+    Using De Morgan's equivalent for OR:
+    carry_out = NOT(NOT(a AND b) AND NOT(carry_in AND (a XOR b)))
+    """
+    # Input wires
+    a = GMWWire("party1_a")
+    b = GMWWire("party1_b")
+    carry_in = GMWWire("party2_carry_in")
 
-#     party1_inputs = {GMWWire("party1_input"): True}
-#     party2_inputs = {GMWWire("party2_input"): True}
+    # Intermediate wires
+    a_xor_b = GMWWire("a_xor_b")
+    a_and_b = GMWWire("a_and_b")
+    carry_and_xor = GMWWire("carry_and_xor")
+    not_ab = GMWWire("not_ab")
+    not_carry_xor = GMWWire("not_carry_xor")
+    nor_result = GMWWire("nor_result")
 
-#     print(f"Party 1 input: {party1_inputs}")
-#     print(f"Party 2 input: {party2_inputs}")
+    # Output wires
+    sum_out = GMWWire("sum")
+    carry_out = GMWWire("carry_out")
 
-#     result = protocol.execute_protocol(party1_inputs, party2_inputs)
-#     expected = circuit.evaluate_plaintext({**party1_inputs, **party2_inputs})
+    gates = [
+        # Compute sum = a XOR b XOR carry_in
+        GMWGate("xor_ab", GMWGateType.XOR, [a, b], a_xor_b),
+        GMWGate("sum_gate", GMWGateType.XOR, [a_xor_b, carry_in], sum_out),
+        # Compute carry_out using De Morgan's law
+        GMWGate("and_ab", GMWGateType.AND, [a, b], a_and_b),
+        GMWGate("and_carry_xor", GMWGateType.AND, [carry_in, a_xor_b], carry_and_xor),
+        # Apply De Morgan's: NOT(NOT(a AND b) AND NOT(carry_in AND (a XOR b)))
+        GMWGate("not_ab_gate", GMWGateType.NOT, [a_and_b], not_ab),
+        GMWGate("not_carry_xor_gate", GMWGateType.NOT, [carry_and_xor], not_carry_xor),
+        GMWGate("nor_gate", GMWGateType.AND, [not_ab, not_carry_xor], nor_result),
+        GMWGate("carry_out_gate", GMWGateType.NOT, [nor_result], carry_out),
+    ]
 
-#     print(f"GMW result: {result}")
-#     print(f"Expected: {expected}")
-#     print(f"Correct: {result == expected}")
+    return GMWCircuit(
+        gates=gates,
+        input_wires=[a, b, carry_in],
+        output_wires=[sum_out, carry_out],
+        party1_input_wires=[a, b],
+        party2_input_wires=[carry_in],
+    )
 
-#     # Example 3: 1-bit Full Adder
-#     print("\n--- Example 3: 1-bit Full Adder ---")
-#     print("Computing: (sum, carry) = a + b + cin")
 
-#     circuit = create_gmw_adder_circuit()
-#     protocol = GMWProtocol(circuit)
+def test_complex_boolean_circuit():
+    """Test the complex Boolean circuit f(a,b,c,d) = (NOT(a) AND b) XOR (c AND NOT(d))"""
+    print("\n--- Testing Complex Boolean Circuit ---")
+    print("Computing: f(a,b,c,d) = (NOT(a) AND b) XOR (c AND NOT(d))")
 
-#     party1_inputs = {
-#         GMWWire("input_a"): True,  # a = 1
-#         GMWWire("input_cin"): True,  # cin = 1
-#     }
-#     party2_inputs = {GMWWire("input_b"): True}  # b = 1
+    circuit = create_complex_boolean_circuit()
 
-#     print("Party 1 inputs: a=1, cin=1")
-#     print("Party 2 inputs: b=1")
-#     print("Expected: 1+1+1 = sum=1, carry=1")
+    # Test a few key cases
+    test_cases = [
+        (False, True, True, False),  # (NOT(0) AND 1) XOR (1 AND NOT(0)) = 1 XOR 1 = 0
+        (True, True, False, False),  # (NOT(1) AND 1) XOR (0 AND NOT(0)) = 0 XOR 0 = 0
+        (False, False, True, True),  # (NOT(0) AND 0) XOR (1 AND NOT(1)) = 0 XOR 0 = 0
+        (True, False, True, False),  # (NOT(1) AND 0) XOR (1 AND NOT(0)) = 0 XOR 1 = 1
+    ]
 
-#     result = protocol.execute_protocol(party1_inputs, party2_inputs)
-#     expected = circuit.evaluate_plaintext({**party1_inputs, **party2_inputs})
+    for a_val, b_val, c_val, d_val in test_cases:
+        print(f"\n🧮 Test: a={a_val}, b={b_val}, c={c_val}, d={d_val}")
 
-#     print(f"GMW result: {result}")
-#     print(f"Expected: {expected}")
-#     print(f"Correct: {result == expected}")
+        party1_inputs = {
+            GMWWire("party1_a"): a_val,
+            GMWWire("party1_b"): b_val,
+        }
 
-#     # Example 4: 2-bit Multiplier (Complex test)
-#     test_2bit_multiplier()
+        party2_inputs = {
+            GMWWire("party2_c"): c_val,
+            GMWWire("party2_d"): d_val,
+        }
 
-#     # Statistics
-#     print("\n" + "=" * 70)
-#     print("PROTOCOL STATISTICS")
-#     print("=" * 70)
+        protocol = GMWProtocol(circuit)
+        result = protocol.execute_protocol(party1_inputs, party2_inputs)
 
-#     circuits = [
-#         ("AND Circuit", create_gmw_and_circuit()),
-#         ("XOR Circuit", create_gmw_xor_circuit()),
-#         ("1-bit Adder", create_gmw_adder_circuit()),
-#         ("2-bit Multiplier", create_2bit_multiplier_circuit()),
-#     ]
+        output_val = result[GMWWire("output")]
+        expected = (not a_val and b_val) ^ (c_val and not d_val)
+        print(f"Expected: {expected}, Got: {output_val}")
+        print(f"✅ Correct: {output_val == expected}")
 
-#     for name, circuit in circuits:
-#         and_gates = len(circuit.get_and_gates())
-#         xor_gates = len(circuit.get_xor_gates())
-#         total_gates = len(circuit.gates)
 
-#         print(
-#             f"{name:15} : {total_gates:3d} gates ({and_gates:2d} AND, {xor_gates:2d} XOR)"
-#         )
-#         print(f"                 Communication rounds for AND gates: {and_gates}")
+def test_full_adder_circuit():
+    """Test the full adder circuit."""
+    print("\n--- Testing Full Adder Circuit ---")
+    print("Computing: sum and carry_out for a + b + carry_in")
+
+    circuit = create_full_adder_circuit()
+
+    test_cases = [
+        (False, False, False, False, False),  # 0+0+0 = 0, carry=0
+        (True, False, False, True, False),  # 1+0+0 = 1, carry=0
+        (True, True, False, False, True),  # 1+1+0 = 0, carry=1
+        (True, True, True, True, True),  # 1+1+1 = 1, carry=1
+    ]
+
+    for a_val, b_val, carry_in_val, expected_sum, expected_carry in test_cases:
+        print(f"\n🧮 Test: {int(a_val)} + {int(b_val)} + {int(carry_in_val)}")
+
+        party1_inputs = {
+            GMWWire("party1_a"): a_val,
+            GMWWire("party1_b"): b_val,
+        }
+
+        party2_inputs = {
+            GMWWire("party2_carry_in"): carry_in_val,
+        }
+
+        protocol = GMWProtocol(circuit)
+        result = protocol.execute_protocol(party1_inputs, party2_inputs)
+
+        sum_val = result[GMWWire("sum")]
+        carry_val = result[GMWWire("carry_out")]
+
+        arithmetic_result = int(a_val) + int(b_val) + int(carry_in_val)
+        print(f"Expected: sum={expected_sum}, carry={expected_carry}")
+        print(f"Got: sum={sum_val}, carry={carry_val}")
+        print(
+            f"Arithmetic check: {arithmetic_result} = {int(carry_val)}*2 + {int(sum_val)}"
+        )
+        print(f"✅ Correct: {sum_val == expected_sum and carry_val == expected_carry}")
+
+
+def run_representative_tests():
+    """Run tests for the 2 representative circuits that use all gate types (AND, XOR, NOT)."""
+    print("🎯 Testing Representative Circuits with AND, XOR, and NOT Gates")
+    print("=" * 70)
+
+    test_complex_boolean_circuit()
+    test_full_adder_circuit()
+
+    print("\n🏆 All representative circuit tests completed!")
 
 
 if __name__ == "__main__":
-    # demonstrate_gmw_protocol()
-    test_not_gates()
+    # Run tests for the 2 representative circuits
+    run_representative_tests()
