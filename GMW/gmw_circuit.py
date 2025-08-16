@@ -20,6 +20,7 @@ class GMWGateType(Enum):
 
     AND = "AND"
     XOR = "XOR"
+    NOT = "NOT"
     INPUT = "INPUT"  # Special gate type for circuit inputs
 
 
@@ -57,6 +58,12 @@ class GMWGate:
             return inputs[self.input_wires[0]] & inputs[self.input_wires[1]]
         elif self.gate_type == GMWGateType.XOR:
             return inputs[self.input_wires[0]] ^ inputs[self.input_wires[1]]
+        elif self.gate_type == GMWGateType.NOT:
+            if len(self.input_wires) != 1:
+                raise ValueError(
+                    f"NOT gate must have exactly 1 input wire, got {len(self.input_wires)}"
+                )
+            return not inputs[self.input_wires[0]]
         elif self.gate_type == GMWGateType.INPUT:
             return inputs[self.input_wires[0]]
         else:
@@ -100,6 +107,10 @@ class GMWCircuit:
     def get_xor_gates(self) -> List[GMWGate]:
         """Get all XOR gates in the circuit (these are free)."""
         return [gate for gate in self.gates if gate.gate_type == GMWGateType.XOR]
+
+    def get_not_gates(self) -> List[GMWGate]:
+        """Get all NOT gates in the circuit (these are also free)."""
+        return [gate for gate in self.gates if gate.gate_type == GMWGateType.NOT]
 
 
 # ================== EXAMPLE CIRCUITS ==================
@@ -150,6 +161,68 @@ def create_gmw_xor_circuit() -> GMWCircuit:
 
     return GMWCircuit(
         gates=[xor_gate],
+        input_wires=[party1_wire, party2_wire],
+        output_wires=[output_wire],
+        party1_input_wires=[party1_wire],
+        party2_input_wires=[party2_wire],
+    )
+
+
+def create_gmw_not_circuit() -> GMWCircuit:
+    """
+    Create a simple NOT circuit: output = NOT party1_input
+    This demonstrates the NOT gate functionality.
+    """
+    # Create wires
+    party1_wire = GMWWire("party1_input")
+    output_wire = GMWWire("output")
+
+    # Create NOT gate
+    not_gate = GMWGate(
+        gate_id="not_gate",
+        gate_type=GMWGateType.NOT,
+        input_wires=[party1_wire],
+        output_wire=output_wire,
+    )
+
+    return GMWCircuit(
+        gates=[not_gate],
+        input_wires=[party1_wire],
+        output_wires=[output_wire],
+        party1_input_wires=[party1_wire],
+        party2_input_wires=[],  # Party 2 has no inputs in this circuit
+    )
+
+
+def create_gmw_nand_circuit() -> GMWCircuit:
+    """
+    Create a NAND circuit using AND + NOT gates: output = NOT(party1_input AND party2_input)
+    This demonstrates combining AND and NOT gates.
+    """
+    # Create wires
+    party1_wire = GMWWire("party1_input")
+    party2_wire = GMWWire("party2_input")
+    and_output_wire = GMWWire("and_output")
+    output_wire = GMWWire("output")
+
+    # Create AND gate
+    and_gate = GMWGate(
+        gate_id="and_gate",
+        gate_type=GMWGateType.AND,
+        input_wires=[party1_wire, party2_wire],
+        output_wire=and_output_wire,
+    )
+
+    # Create NOT gate
+    not_gate = GMWGate(
+        gate_id="not_gate",
+        gate_type=GMWGateType.NOT,
+        input_wires=[and_output_wire],
+        output_wire=output_wire,
+    )
+
+    return GMWCircuit(
+        gates=[and_gate, not_gate],
         input_wires=[party1_wire, party2_wire],
         output_wires=[output_wire],
         party1_input_wires=[party1_wire],
@@ -298,7 +371,7 @@ if __name__ == "__main__":
     print(f"Input: {test_inputs}")
     print(f"Output: {result}")
     print(
-        f"Gates: {len(and_circuit.gates)} ({len(and_circuit.get_and_gates())} AND, {len(and_circuit.get_xor_gates())} XOR)"
+        f"Gates: {len(and_circuit.gates)} ({len(and_circuit.get_and_gates())} AND, {len(and_circuit.get_xor_gates())} XOR, {len(and_circuit.get_not_gates())} NOT)"
     )
 
     # Test XOR circuit
@@ -308,7 +381,28 @@ if __name__ == "__main__":
     print(f"Input: {test_inputs}")
     print(f"Output: {result}")
     print(
-        f"Gates: {len(xor_circuit.gates)} ({len(xor_circuit.get_and_gates())} AND, {len(xor_circuit.get_xor_gates())} XOR)"
+        f"Gates: {len(xor_circuit.gates)} ({len(xor_circuit.get_and_gates())} AND, {len(xor_circuit.get_xor_gates())} XOR, {len(xor_circuit.get_not_gates())} NOT)"
+    )
+
+    # Test NOT circuit
+    print("\nTesting NOT circuit:")
+    not_circuit = create_gmw_not_circuit()
+    not_inputs = {GMWWire("party1_input"): True}
+    result = not_circuit.evaluate_plaintext(not_inputs)
+    print(f"Input: {not_inputs}")
+    print(f"Output: {result}")
+    print(
+        f"Gates: {len(not_circuit.gates)} ({len(not_circuit.get_and_gates())} AND, {len(not_circuit.get_xor_gates())} XOR, {len(not_circuit.get_not_gates())} NOT)"
+    )
+
+    # Test NAND circuit
+    print("\nTesting NAND circuit:")
+    nand_circuit = create_gmw_nand_circuit()
+    result = nand_circuit.evaluate_plaintext(test_inputs)
+    print(f"Input: {test_inputs}")
+    print(f"Output: {result}")
+    print(
+        f"Gates: {len(nand_circuit.gates)} ({len(nand_circuit.get_and_gates())} AND, {len(nand_circuit.get_xor_gates())} XOR, {len(nand_circuit.get_not_gates())} NOT)"
     )
 
     # Test adder circuit
@@ -320,8 +414,8 @@ if __name__ == "__main__":
         GMWWire("input_cin"): False,
     }
     result = adder_circuit.evaluate_plaintext(adder_inputs)
-    print(f"Input: a=1, b=1, cin=0")
+    print("Input: a=1, b=1, cin=0")
     print(f"Output: {result}")
     print(
-        f"Gates: {len(adder_circuit.gates)} ({len(adder_circuit.get_and_gates())} AND, {len(adder_circuit.get_xor_gates())} XOR)"
+        f"Gates: {len(adder_circuit.gates)} ({len(adder_circuit.get_and_gates())} AND, {len(adder_circuit.get_xor_gates())} XOR, {len(adder_circuit.get_not_gates())} NOT)"
     )

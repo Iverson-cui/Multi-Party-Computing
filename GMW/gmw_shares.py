@@ -132,6 +132,7 @@ class GMWShareManager:
         For XOR gates: share_output = share_input1 ⊕ share_input2
         This works because: (a ⊕ b) = (a1 ⊕ a2) ⊕ (b1 ⊕ b2) = (a1 ⊕ b1) ⊕ (a2 ⊕ b2)
         """
+
         if len(gate_input_wires) != 2:
             raise ValueError("XOR gate must have exactly 2 inputs")
 
@@ -143,6 +144,39 @@ class GMWShareManager:
         # write back output shares automatically
         self.set_share(gate_output_wire, output_share)
         print(f"[Party {self.party_id}] XOR gate: {share1} ⊕ {share2} = {output_share}")
+
+    def evaluate_not_gate(self, gate_input_wire: GMWWire, gate_output_wire: GMWWire):
+        """
+        Evaluate a NOT gate locally (no communication needed).
+
+        For NOT gates in GMW protocol:
+        We want NOT(x) = NOT(x1 ⊕ x2) = (NOT x1) ⊕ x2 = x1 ⊕ (NOT x2)
+
+        The standard approach is to have only Party 1 flip their share,
+        while Party 2 keeps their share unchanged. This ensures:
+        NOT(x) = (NOT x1) ⊕ x2
+
+        This works because:
+        - If x = 0 = x1 ⊕ x2, then NOT(x) = 1 = (NOT x1) ⊕ x2
+        - If x = 1 = x1 ⊕ x2, then NOT(x) = 0 = (NOT x1) ⊕ x2
+        """
+
+        # Get input share
+        input_share = self.get_share(gate_input_wire)
+
+        # Only Party 1 flips their share, Party 2 keeps theirs unchanged
+        if self.party_id == 1:
+            output_share = not input_share
+            print(
+                f"[Party {self.party_id}] NOT gate: NOT({input_share}) = {output_share} (flipped)"
+            )
+        else:
+            output_share = input_share
+            print(
+                f"[Party {self.party_id}] NOT gate: {input_share} = {output_share} (unchanged)"
+            )
+
+        self.set_share(gate_output_wire, output_share)
 
     def prepare_and_gate_ot_input(self, gate_input_wires: List[GMWWire]) -> int:
         """

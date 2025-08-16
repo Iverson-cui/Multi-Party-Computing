@@ -454,7 +454,6 @@ class Sender:
 
     #     # IMPORTANT: In a real implementation, we would shuffle the garbled table
     #     # to prevent position-based information leakage
-    #     # TODO: implement point and permute.
     #     secrets.SystemRandom().shuffle(garbled_table)
 
     #     return GarbledGate(gate=gate, garbled_table=garbled_table)
@@ -506,7 +505,6 @@ class Sender:
                     input_label[:-1],  # Use label without permutation bit as key
                     output_label + b"right",
                 )
-                # TODO: decryption still need to remove last bit
                 # Place entry at position determined by permutation bit
                 table_entries[perm_bit] = encrypted_entry
 
@@ -575,7 +573,6 @@ class Sender:
         The reason that there may be labels already with permutation bits is that we are processing both input and output labels of the gate. Output labels may be the input labels for another gates.
 
         But circuit output wire labels still have these bits.
-        #TODO: output label logic.
         """
         # Check all wires connected to this gate
         wires_to_check = gate.input_wires + [gate.output_wire]

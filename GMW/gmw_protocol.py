@@ -6,17 +6,24 @@ The protocol works by:
 1. Secret sharing all inputs using XOR shares
 2. Evaluating XOR gates locally (no communication)
 3. Evaluating AND gates using 1-out-of-4 Oblivious Transfer
-4. Reconstructing the final output
+4. Evaluating NOT gates locally (no communication, only one party flips)
+5. Reconstructing the final output
 
 Key insight for AND gate evaluation:
 The sender (Party 2) chooses a random output share z2, then provides four OT values
 such that the chooser (Party 1) obtains z1 = z2 ⊕ ((x1 ⊕ x2) ∧ (y1 ⊕ y2)),
 where x1,y1 are Party 1's input shares and x2,y2 are Party 2's input shares.
 This ensures z1 ⊕ z2 = (x1 ⊕ x2) ∧ (y1 ⊕ y2), the correct AND result.
+
+Key insight for NOT gate evaluation:
+For NOT gates, only one party needs to flip their share. We use the convention
+that Party 1 flips their share while Party 2 keeps theirs unchanged.
+This ensures the XOR reconstruction gives the correct NOT result.
 """
 
 import sys
 import os
+import time
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "GC"))
 
@@ -95,6 +102,8 @@ class GMWParty1:
                         self._evaluate_xor_gate(gate)
                     elif gate.gate_type == GMWGateType.AND:
                         self._evaluate_and_gate(gate)
+                    elif gate.gate_type == GMWGateType.NOT:
+                        self._evaluate_not_gate(gate)
                     elif gate.gate_type == GMWGateType.INPUT:
                         # Input gates don't need evaluation
                         pass
@@ -126,6 +135,13 @@ class GMWParty1:
         """Evaluate XOR gate locally (no communication needed)."""
         print(f"[Party 1] Evaluating XOR gate: {gate.gate_id}")
         self.share_manager.evaluate_xor_gate(gate.input_wires, gate.output_wire)
+
+    def _evaluate_not_gate(self, gate: GMWGate):
+        """Evaluate NOT gate locally (no communication needed)."""
+        print(f"[Party 1] Evaluating NOT gate: {gate.gate_id}")
+        if len(gate.input_wires) != 1:
+            raise ValueError("NOT gate must have exactly 1 input")
+        self.share_manager.evaluate_not_gate(gate.input_wires[0], gate.output_wire)
 
     def _evaluate_and_gate(self, gate: GMWGate):
         """
@@ -214,7 +230,11 @@ class GMWParty2:
 
             for gate in remaining_gates:
                 # Check if all input wires for this gate are ready
-                inputs_ready = all(wire in processed_wires for wire in gate.input_wires)
+                assert (
+                    inputs_ready := all(
+                        wire in processed_wires for wire in gate.input_wires
+                    )
+                )
 
                 if inputs_ready:
                     if gate.gate_type == GMWGateType.XOR:
@@ -222,11 +242,17 @@ class GMWParty2:
                         # Mark output wire as processed
                         processed_wires.add(gate.output_wire)
                         gates_processed_this_round.append(gate)
+                    elif gate.gate_type == GMWGateType.NOT:
+                        self._evaluate_not_gate(gate)
+                        # Mark output wire as processed
+                        processed_wires.add(gate.output_wire)
+                        gates_processed_this_round.append(gate)
                     elif gate.gate_type == GMWGateType.AND:
                         # AND gates are handled when Party 1 requests OT
                         # We still need to mark them as processed after OT
                         # This will be handled in provide_and_gate_ot_values
-                        pass
+                        processed_wires.add(gate.output_wire)
+                        # gates_processed_this_round.append(gate)
                     elif gate.gate_type == GMWGateType.INPUT:
                         # Input gates don't need evaluation
                         processed_wires.add(gate.output_wire)
@@ -243,7 +269,7 @@ class GMWParty2:
                     gate.gate_type == GMWGateType.AND
                     and gate.output_wire in self.share_manager.shares
                 ):
-                    processed_wires.add(gate.output_wire)
+                    # processed_wires.add(gate.output_wire)
                     and_gates_to_remove.append(gate)
 
             for gate in and_gates_to_remove:
@@ -271,7 +297,49 @@ class GMWParty2:
     def _evaluate_xor_gate(self, gate: GMWGate):
         """Evaluate XOR gate locally (no communication needed)."""
         print(f"[Party 2] Evaluating XOR gate: {gate.gate_id}")
+        # First, ensure we have computed shares for the input wires if they're intermediate results
+        for input_wire in gate.input_wires:
+            if input_wire not in self.share_manager.shares:
+                # This input wire might be the output of another gate we need to evaluate first
+                # Find the gate that produces this wire
+                for circuit_gate in self.circuit.gates:
+                    if circuit_gate.output_wire == input_wire:
+                        if circuit_gate.gate_type == GMWGateType.XOR:
+                            self._evaluate_xor_gate(circuit_gate)
+                        elif circuit_gate.gate_type == GMWGateType.NOT:
+                            self._evaluate_not_gate(circuit_gate)
+                        elif circuit_gate.gate_type == GMWGateType.AND:
+                            # This shouldn't happen in proper topological order, but handle it
+                            raise RuntimeError(
+                                f"AND gate {gate.gate_id} depends on another AND gate {circuit_gate.gate_id}"
+                            )
+                        break
         self.share_manager.evaluate_xor_gate(gate.input_wires, gate.output_wire)
+
+    def _evaluate_not_gate(self, gate: GMWGate):
+        """Evaluate NOT gate locally (no communication needed)."""
+        print(f"[Party 2] Evaluating NOT gate: {gate.gate_id}")
+        if len(gate.input_wires) != 1:
+            raise ValueError("NOT gate must have exactly 1 input")
+
+        # First, ensure we have computed shares for the input wires if they're intermediate results
+        for input_wire in gate.input_wires:
+            if input_wire not in self.share_manager.shares:
+                # This input wire might be the output of another gate we need to evaluate first
+                # Find the gate that produces this wire
+                for circuit_gate in self.circuit.gates:
+                    if circuit_gate.output_wire == input_wire:
+                        if circuit_gate.gate_type == GMWGateType.XOR:
+                            self._evaluate_xor_gate(circuit_gate)
+                        elif circuit_gate.gate_type == GMWGateType.NOT:
+                            self._evaluate_not_gate(circuit_gate)
+                        elif circuit_gate.gate_type == GMWGateType.AND:
+                            # This shouldn't happen in proper topological order, but handle it
+                            raise RuntimeError(
+                                f"AND gate {gate.gate_id} depends on another AND gate {circuit_gate.gate_id}"
+                            )
+                        break
+        self.share_manager.evaluate_not_gate(gate.input_wires[0], gate.output_wire)
 
     def provide_and_gate_ot_values(self, gate: GMWGate, party1_selection: int) -> bool:
         """
@@ -294,10 +362,13 @@ class GMWParty2:
             if input_wire not in self.share_manager.shares:
                 # This input wire might be the output of another gate we need to evaluate first
                 # Find the gate that produces this wire
+
                 for circuit_gate in self.circuit.gates:
                     if circuit_gate.output_wire == input_wire:
                         if circuit_gate.gate_type == GMWGateType.XOR:
                             self._evaluate_xor_gate(circuit_gate)
+                        elif circuit_gate.gate_type == GMWGateType.NOT:
+                            self._evaluate_not_gate(circuit_gate)
                         elif circuit_gate.gate_type == GMWGateType.AND:
                             # This shouldn't happen in proper topological order, but handle it
                             raise RuntimeError(
@@ -340,7 +411,7 @@ class GMWParty2:
         chosen_value_str = receiver.decrypt_chosen_secret(e0, e1, e2, e3)
 
         # Convert back to boolean
-        chosen_value = chosen_value_str == "True"
+        chosen_value = chosen_value_str == b"True"
 
         # Set our share of the output to the random z2
         self.share_manager.set_share(gate.output_wire, z2)
@@ -353,96 +424,41 @@ class GMWParty2:
         return chosen_value
 
 
-class GMWProtocol:
-    """
-    Main GMW protocol coordinator.
-    Manages the complete protocol execution between two parties.
-    """
-
-    def __init__(self, circuit: GMWCircuit):
-        self.circuit = circuit
-        self.party1 = GMWParty1(circuit)
-        self.party2 = GMWParty2(circuit)
-        self.party1.connect_to_party2(self.party2)
-
-    def execute_protocol(
-        self, party1_inputs: Dict[GMWWire, bool], party2_inputs: Dict[GMWWire, bool]
-    ) -> Dict[GMWWire, bool]:
-        """
-        Execute the complete GMW protocol.
-
-        Returns:
-            The final output values (reconstructed from shares)
-        """
-        print("🔐 Starting GMW Protocol Execution")
-        print("=" * 50)
-
-        # Set inputs
-        self.party1.set_inputs(party1_inputs)
-        self.party2.set_inputs(party2_inputs)
-
-        # Phase 1: Input sharing
-        # Both parties have all wire shares in this phase.
-        print("\n📤 Phase 1: Input Sharing")
-        party2_shares = self.party1.share_inputs(party2_inputs)
-        self.party2.receive_input_shares(party2_shares)
-
-        # Phase 2: Circuit evaluation
-        # XOR gate: Both parties need to process it to get their own shares
-        # AND gate: Party 1 is the OT receiver and propose evaluation requirement.
-        print("\n⚙️  Phase 2: Circuit Evaluation")
-        party1_output_shares = self.party1.evaluate_circuit()
-        party2_output_shares = self.party2.evaluate_circuit()
-
-        # Phase 3: Output reconstruction
-        print("\n🔓 Phase 3: Output Reconstruction")
-        final_outputs = {}
-
-        for wire in self.circuit.output_wires:
-            share1 = party1_output_shares[wire]
-            share2 = party2_output_shares[wire]
-            final_value = XORSecretSharing.reconstruct_secret(share1, share2)
-            final_outputs[wire] = final_value
-
-            print(
-                f"Output wire {wire.wire_id}: shares=({share1}, {share2}) -> value={final_value}"
-            )
-
-        print("\n✅ GMW Protocol Complete!")
-        print(f"Final outputs: {final_outputs}")
-
-        return final_outputs
-
-
-# ================== DEMONSTRATION ==================
-
-
 def create_2bit_multiplier_circuit() -> GMWCircuit:
     """
-    Create a 2-bit multiplier circuit: multiply two 2-bit numbers.
-    Party 1 has number A = a1*2 + a0
-    Party 2 has number B = b1*2 + b0
-    Output: A * B = c3*8 + c2*4 + c1*2 + c0
+    Create a 2-bit multiplier circuit: C = A × B
+    Where A = [a1, a0] and B = [b1, b0] are 2-bit numbers
+    And C = [c3, c2, c1, c0] is the 4-bit result
 
-    This creates a more complex circuit with multiple AND and XOR gates.
+    The multiplication algorithm:
+      A = a1*2 + a0
+      B = b1*2 + b0
+      C = A*B = (a1*2 + a0) * (b1*2 + b0)
+        = a1*b1*4 + a1*b0*2 + a0*b1*2 + a0*b0
+        = (a1*b1)*4 + (a1*b0 + a0*b1)*2 + (a0*b0)
+
+    In binary, this becomes:
+      c3 c2 c1 c0 = (a1∧b1) (carry from c1) (a1∧b0 ⊕ a0∧b1) (a0∧b0)
+
+    Where carry from c1 = (a1∧b0) ∧ (a0∧b1)
+    And c2 = (a1∧b1) ⊕ carry_from_c1
     """
-    # Party 1's 2-bit input (a1 is MSB, a0 is LSB)
+    # Input wires for A (party 1's 2-bit number)
     a1 = GMWWire("party1_a1")  # MSB
     a0 = GMWWire("party1_a0")  # LSB
 
-    # Party 2's 2-bit input (b1 is MSB, b0 is LSB)
+    # Input wires for B (party 2's 2-bit number)
     b1 = GMWWire("party2_b1")  # MSB
     b0 = GMWWire("party2_b0")  # LSB
 
     # Intermediate wires for partial products
-    # p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1
-    p00 = GMWWire("p00")
-    p01 = GMWWire("p01")
-    p10 = GMWWire("p10")
-    p11 = GMWWire("p11")
+    p00 = GMWWire("prod_a0_b0")  # a0 ∧ b0
+    p01 = GMWWire("prod_a0_b1")  # a0 ∧ b1
+    p10 = GMWWire("prod_a1_b0")  # a1 ∧ b0
+    p11 = GMWWire("prod_a1_b1")  # a1 ∧ b1
 
-    # Intermediate wires for carry
-    carry1 = GMWWire("carry1")  # carry from adding p01 and p10
+    # Intermediate wires for carries
+    carry1 = GMWWire("carry_from_c1")  # Carry from bit position 1
 
     # Output wires (4-bit result)
     c0 = GMWWire("output_c0")  # LSB
@@ -541,108 +557,400 @@ def test_2bit_multiplier():
         print(f"Circuit plaintext verification: {expected_circuit}")
 
 
-def demonstrate_gmw_protocol():
-    """Demonstrate the GMW protocol with various circuits."""
-    print("=" * 70)
-    print("GMW PROTOCOL DEMONSTRATION")
-    print("=" * 70)
+# ================== DEMONSTRATION ==================
 
-    # Import circuit examples
-    from gmw_circuit import (
-        create_gmw_and_circuit,
-        create_gmw_xor_circuit,
-        create_gmw_adder_circuit,
-    )
 
-    # Example 1: Simple AND circuit
-    print("\n--- Example 1: AND Circuit ---")
-    print("Computing: party1_input AND party2_input")
+def create_2bit_multiplier_circuit() -> GMWCircuit:
+    """
+    Create a 2-bit multiplier circuit: multiply two 2-bit numbers.
+    Party 1 has number A = a1*2 + a0
+    Party 2 has number B = b1*2 + b0
+    Output: A * B = c3*8 + c2*4 + c1*2 + c0
 
-    circuit = create_gmw_and_circuit()
-    protocol = GMWProtocol(circuit)
+    This creates a more complex circuit with multiple AND and XOR gates.
+    """
+    # Party 1's 2-bit input (a1 is MSB, a0 is LSB)
+    a1 = GMWWire("party1_a1")  # MSB
+    a0 = GMWWire("party1_a0")  # LSB
 
-    party1_inputs = {GMWWire("party1_input"): True}
-    party2_inputs = {GMWWire("party2_input"): False}
+    # Party 2's 2-bit input (b1 is MSB, b0 is LSB)
+    b1 = GMWWire("party2_b1")  # MSB
+    b0 = GMWWire("party2_b0")  # LSB
 
-    print(f"Party 1 input: {party1_inputs}")
-    print(f"Party 2 input: {party2_inputs}")
+    # Intermediate wires for partial products
+    # p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1
+    p00 = GMWWire("p00")
+    p01 = GMWWire("p01")
+    p10 = GMWWire("p10")
+    p11 = GMWWire("p11")
 
-    result = protocol.execute_protocol(party1_inputs, party2_inputs)
-    expected = circuit.evaluate_plaintext({**party1_inputs, **party2_inputs})
+    # Intermediate wires for carry
+    carry1 = GMWWire("carry1")  # carry from adding p01 and p10
 
-    print(f"GMW result: {result}")
-    print(f"Expected: {expected}")
-    print(f"Correct: {result == expected}")
+    # Output wires (4-bit result)
+    c0 = GMWWire("output_c0")  # LSB
+    c1 = GMWWire("output_c1")
+    c2 = GMWWire("output_c2")
+    c3 = GMWWire("output_c3")  # MSB
 
-    # Example 2: XOR circuit
-    print("\n--- Example 2: XOR Circuit ---")
-    print("Computing: party1_input XOR party2_input")
-
-    circuit = create_gmw_xor_circuit()
-    protocol = GMWProtocol(circuit)
-
-    party1_inputs = {GMWWire("party1_input"): True}
-    party2_inputs = {GMWWire("party2_input"): True}
-
-    print(f"Party 1 input: {party1_inputs}")
-    print(f"Party 2 input: {party2_inputs}")
-
-    result = protocol.execute_protocol(party1_inputs, party2_inputs)
-    expected = circuit.evaluate_plaintext({**party1_inputs, **party2_inputs})
-
-    print(f"GMW result: {result}")
-    print(f"Expected: {expected}")
-    print(f"Correct: {result == expected}")
-
-    # Example 3: 1-bit Full Adder
-    print("\n--- Example 3: 1-bit Full Adder ---")
-    print("Computing: (sum, carry) = a + b + cin")
-
-    circuit = create_gmw_adder_circuit()
-    protocol = GMWProtocol(circuit)
-
-    party1_inputs = {
-        GMWWire("input_a"): True,  # a = 1
-        GMWWire("input_cin"): True,  # cin = 1
-    }
-    party2_inputs = {GMWWire("input_b"): True}  # b = 1
-
-    print("Party 1 inputs: a=1, cin=1")
-    print("Party 2 inputs: b=1")
-    print("Expected: 1+1+1 = sum=1, carry=1")
-
-    result = protocol.execute_protocol(party1_inputs, party2_inputs)
-    expected = circuit.evaluate_plaintext({**party1_inputs, **party2_inputs})
-
-    print(f"GMW result: {result}")
-    print(f"Expected: {expected}")
-    print(f"Correct: {result == expected}")
-
-    # Example 4: 2-bit Multiplier (Complex test)
-    test_2bit_multiplier()
-
-    # Statistics
-    print("\n" + "=" * 70)
-    print("PROTOCOL STATISTICS")
-    print("=" * 70)
-
-    circuits = [
-        ("AND Circuit", create_gmw_and_circuit()),
-        ("XOR Circuit", create_gmw_xor_circuit()),
-        ("1-bit Adder", create_gmw_adder_circuit()),
-        ("2-bit Multiplier", create_2bit_multiplier_circuit()),
+    gates = [
+        # Step 1: Compute partial products using AND gates
+        GMWGate("mult_a0_b0", GMWGateType.AND, [a0, b0], p00),
+        GMWGate("mult_a0_b1", GMWGateType.AND, [a0, b1], p01),
+        GMWGate("mult_a1_b0", GMWGateType.AND, [a1, b0], p10),
+        GMWGate("mult_a1_b1", GMWGateType.AND, [a1, b1], p11),
+        # Step 2: c0 = p00 (just copy)
+        GMWGate("copy_c0", GMWGateType.XOR, [p00, GMWWire("zero_c0")], c0),
+        # Step 3: c1 = p01 XOR p10
+        GMWGate("compute_c1", GMWGateType.XOR, [p01, p10], c1),
+        # Step 4: carry from c1 = p01 AND p10
+        GMWGate("carry_from_c1", GMWGateType.AND, [p01, p10], carry1),
+        # Step 5: c2 = p11 XOR carry1
+        GMWGate("compute_c2", GMWGateType.XOR, [p11, carry1], c2),
+        # Step 6: c3 = p11 AND carry1 (final carry)
+        GMWGate("compute_c3", GMWGateType.AND, [p11, carry1], c3),
     ]
 
-    for name, circuit in circuits:
-        and_gates = len(circuit.get_and_gates())
-        xor_gates = len(circuit.get_xor_gates())
-        total_gates = len(circuit.gates)
+    # Create zero wire
+    zero_c0 = GMWWire("zero_c0")
 
+    return GMWCircuit(
+        gates=gates,
+        input_wires=[a1, a0, b1, b0, zero_c0],
+        output_wires=[c3, c2, c1, c0],  # MSB to LSB
+        party1_input_wires=[a1, a0, zero_c0],
+        party2_input_wires=[b1, b0],
+    )
+
+
+class GMWProtocol:
+    """
+    Coordinates the complete GMW protocol execution between two parties.
+    Handles timing and statistics collection.
+    """
+
+    def __init__(self, circuit: GMWCircuit):
+        self.circuit = circuit
+        self.party1 = GMWParty1(circuit)
+        self.party2 = GMWParty2(circuit)
+
+        # Connect parties
+        self.party1.connect_to_party2(self.party2)
+
+        # Timing statistics
+        self.timing_stats = {}
+
+    def execute_protocol(
+        self, party1_inputs: Dict[GMWWire, bool], party2_inputs: Dict[GMWWire, bool]
+    ) -> Dict[GMWWire, bool]:
+        """
+        Execute the complete GMW protocol with timing.
+
+        Returns:
+            Dict mapping output wires to their final Boolean values
+        """
+        total_start_time = time.time()
+
+        print("\n🚀 Starting GMW Protocol Execution")
+        print("=" * 50)
+
+        # Phase 1: Input sharing
+        print("\n📤 Phase 1: Input Sharing")
+        sharing_start_time = time.time()
+
+        self.party1.set_inputs(party1_inputs)
+        self.party2.set_inputs(party2_inputs)
+
+        party2_shares = self.party1.share_inputs(party2_inputs)
+        self.party2.receive_input_shares(party2_shares)
+
+        sharing_time = time.time() - sharing_start_time
+        self.timing_stats["input_sharing"] = sharing_time
+        print(f"⏱️  Input sharing completed in {sharing_time:.4f} seconds")
+
+        # Phase 2: Circuit evaluation
+        print("\n⚡ Phase 2: Circuit Evaluation")
+        evaluation_start_time = time.time()
+
+        # Both parties evaluate the circuit
+        party1_output_shares = self.party1.evaluate_circuit()
+        party2_output_shares = self.party2.evaluate_circuit()
+
+        evaluation_time = time.time() - evaluation_start_time
+        self.timing_stats["circuit_evaluation"] = evaluation_time
+        print(f"⏱️  Circuit evaluation completed in {evaluation_time:.4f} seconds")
+
+        # Phase 3: Output reconstruction
+        print("\n🔍 Phase 3: Output Reconstruction")
+        reconstruction_start_time = time.time()
+
+        final_outputs = {}
+        for wire in self.circuit.output_wires:
+            share1 = party1_output_shares[wire]
+            share2 = party2_output_shares[wire]
+            final_value = XORSecretSharing.reconstruct_secret(share1, share2)
+            final_outputs[wire] = final_value
+            print(f"Output {wire.wire_id}: {share1} ⊕ {share2} = {final_value}")
+
+        reconstruction_time = time.time() - reconstruction_start_time
+        self.timing_stats["output_reconstruction"] = reconstruction_time
         print(
-            f"{name:15} : {total_gates:3d} gates ({and_gates:2d} AND, {xor_gates:2d} XOR)"
+            f"⏱️  Output reconstruction completed in {reconstruction_time:.4f} seconds"
         )
-        print(f"                 Communication rounds for AND gates: {and_gates}")
+
+        total_time = time.time() - total_start_time
+        self.timing_stats["total_time"] = total_time
+
+        print(f"\n🏁 Protocol completed in {total_time:.4f} seconds total")
+        self._print_gate_statistics()
+        self._print_detailed_timing()
+
+        return final_outputs
+
+    def _print_gate_statistics(self):
+        """Print statistics about the circuit."""
+        and_gates = len(self.circuit.get_and_gates())
+        xor_gates = len(self.circuit.get_xor_gates())
+        not_gates = len(self.circuit.get_not_gates())
+        total_gates = len(self.circuit.gates)
+
+        print(f"\n📊 Circuit Statistics:")
+        print(f"   Total gates: {total_gates}")
+        print(f"   AND gates: {and_gates} (require communication)")
+        print(f"   XOR gates: {xor_gates} (local evaluation)")
+        print(f"   NOT gates: {not_gates} (local evaluation)")
+        print(f"   Communication rounds: {and_gates}")
+
+    def _print_detailed_timing(self):
+        """Print detailed timing breakdown."""
+        print(f"\n⏱️  Detailed Timing Breakdown:")
+        for phase, duration in self.timing_stats.items():
+            percentage = (duration / self.timing_stats["total_time"]) * 100
+            print(
+                f"   {phase.replace('_', ' ').title()}: {duration:.4f}s ({percentage:.1f}%)"
+            )
+
+
+def test_not_gates():
+    """Test circuits with NOT gates and timing."""
+    print("\n--- Testing NOT Gate Functionality ---")
+
+    # Import circuit examples - using direct import to avoid path issues
+    from gmw_circuit import create_gmw_not_circuit, create_gmw_nand_circuit
+
+    # Test 1: Simple NOT circuit
+    print("\n🔧 Test 1: Simple NOT Circuit")
+    print("Computing: NOT(party1_input)")
+
+    not_circuit = create_gmw_not_circuit()
+    protocol = GMWProtocol(not_circuit)
+
+    party1_inputs = {GMWWire("party1_input"): True}
+    party2_inputs = {}  # No inputs from party 2
+
+    print(f"Party 1 input: {party1_inputs}")
+    print(f"Party 2 input: {party2_inputs}")
+
+    result = protocol.execute_protocol(party1_inputs, party2_inputs)
+    expected = not_circuit.evaluate_plaintext({**party1_inputs, **party2_inputs})
+
+    print(f"GMW result: {result}")
+    print(f"Expected: {expected}")
+    print(f"✅ Correct: {result == expected}")
+
+    # Test 2: NAND circuit (AND + NOT)
+    print("\n🔧 Test 2: NAND Circuit (AND + NOT)")
+    print("Computing: NOT(party1_input AND party2_input)")
+
+    nand_circuit = create_gmw_nand_circuit()
+    protocol = GMWProtocol(nand_circuit)
+
+    test_cases = [
+        (False, False, "0 NAND 0 = 1"),
+        (False, True, "0 NAND 1 = 1"),
+        (True, False, "1 NAND 0 = 1"),
+        (True, True, "1 NAND 1 = 0"),
+    ]
+
+    for p1_val, p2_val, description in test_cases:
+        print(f"\n🧮 Test case: {description}")
+
+        party1_inputs = {GMWWire("party1_input"): p1_val}
+        party2_inputs = {GMWWire("party2_input"): p2_val}
+
+        protocol_fresh = GMWProtocol(nand_circuit)
+        result = protocol_fresh.execute_protocol(party1_inputs, party2_inputs)
+        expected = nand_circuit.evaluate_plaintext({**party1_inputs, **party2_inputs})
+
+        print(f"GMW result: {result}")
+        print(f"Expected: {expected}")
+        print(f"✅ Correct: {result == expected}")
+
+
+def demonstrate_gmw_protocol():
+    """Test the 2-bit multiplier with several test cases."""
+    print("\n--- Complex Example: 2-bit Multiplier ---")
+    print("Computing: A * B where A and B are 2-bit numbers")
+
+    circuit = create_2bit_multiplier_circuit()
+
+    test_cases = [
+        (3, 2, "3 * 2 = 6"),  # 11 * 10 = 0110
+        (2, 3, "2 * 3 = 6"),  # 10 * 11 = 0110
+        (3, 3, "3 * 3 = 9"),  # 11 * 11 = 1001
+        (1, 2, "1 * 2 = 2"),  # 01 * 10 = 0010
+        (0, 3, "0 * 3 = 0"),  # 00 * 11 = 0000
+    ]
+
+    for a_val, b_val, description in test_cases:
+        print(f"\n🧮 Test case: {description}")
+
+        # Convert to binary
+        a1_bit = bool(a_val & 2)  # bit 1
+        a0_bit = bool(a_val & 1)  # bit 0
+        b1_bit = bool(b_val & 2)  # bit 1
+        b0_bit = bool(b_val & 1)  # bit 0
+
+        party1_inputs = {
+            GMWWire("party1_a1"): a1_bit,
+            GMWWire("party1_a0"): a0_bit,
+            GMWWire("zero_c0"): False,
+        }
+
+        party2_inputs = {
+            GMWWire("party2_b1"): b1_bit,
+            GMWWire("party2_b0"): b0_bit,
+        }
+
+        print(f"Party 1: A = {a_val} (binary: {a1_bit}{a0_bit})")
+        print(f"Party 2: B = {b_val} (binary: {b1_bit}{b0_bit})")
+
+        # Create fresh protocol instance
+        protocol = GMWProtocol(circuit)
+        result = protocol.execute_protocol(party1_inputs, party2_inputs)
+
+        # Extract result bits and convert to integer
+        c3 = result[GMWWire("output_c3")]
+        c2 = result[GMWWire("output_c2")]
+        c1 = result[GMWWire("output_c1")]
+        c0 = result[GMWWire("output_c0")]
+
+        result_value = (int(c3) << 3) + (int(c2) << 2) + (int(c1) << 1) + int(c0)
+        expected_value = a_val * b_val
+
+        print(f"GMW result: {c3}{c2}{c1}{c0} = {result_value}")
+        print(f"Expected: {expected_value}")
+        print(f"✅ Correct: {result_value == expected_value}")
+
+        # Also verify with plaintext evaluation
+        all_inputs = {**party1_inputs, **party2_inputs}
+        expected_circuit = circuit.evaluate_plaintext(all_inputs)
+        print(f"Circuit plaintext verification: {expected_circuit}")
+
+
+# def demonstrate_gmw_protocol():
+#     """Demonstrate the GMW protocol with various circuits."""
+#     print("=" * 70)
+#     print("GMW PROTOCOL DEMONSTRATION")
+#     print("=" * 70)
+
+#     # Import circuit examples
+#     from gmw_circuit import (
+#         create_gmw_and_circuit,
+#         create_gmw_xor_circuit,
+#         create_gmw_adder_circuit,
+#     )
+
+#     # Example 1: Simple AND circuit
+#     print("\n--- Example 1: AND Circuit ---")
+#     print("Computing: party1_input AND party2_input")
+
+#     circuit = create_gmw_and_circuit()
+#     protocol = GMWProtocol(circuit)
+
+#     party1_inputs = {GMWWire("party1_input"): True}
+#     party2_inputs = {GMWWire("party2_input"): False}
+
+#     print(f"Party 1 input: {party1_inputs}")
+#     print(f"Party 2 input: {party2_inputs}")
+
+#     result = protocol.execute_protocol(party1_inputs, party2_inputs)
+#     expected = circuit.evaluate_plaintext({**party1_inputs, **party2_inputs})
+
+#     print(f"GMW result: {result}")
+#     print(f"Expected: {expected}")
+#     print(f"Correct: {result == expected}")
+
+#     # Example 2: XOR circuit
+#     print("\n--- Example 2: XOR Circuit ---")
+#     print("Computing: party1_input XOR party2_input")
+
+#     circuit = create_gmw_xor_circuit()
+#     protocol = GMWProtocol(circuit)
+
+#     party1_inputs = {GMWWire("party1_input"): True}
+#     party2_inputs = {GMWWire("party2_input"): True}
+
+#     print(f"Party 1 input: {party1_inputs}")
+#     print(f"Party 2 input: {party2_inputs}")
+
+#     result = protocol.execute_protocol(party1_inputs, party2_inputs)
+#     expected = circuit.evaluate_plaintext({**party1_inputs, **party2_inputs})
+
+#     print(f"GMW result: {result}")
+#     print(f"Expected: {expected}")
+#     print(f"Correct: {result == expected}")
+
+#     # Example 3: 1-bit Full Adder
+#     print("\n--- Example 3: 1-bit Full Adder ---")
+#     print("Computing: (sum, carry) = a + b + cin")
+
+#     circuit = create_gmw_adder_circuit()
+#     protocol = GMWProtocol(circuit)
+
+#     party1_inputs = {
+#         GMWWire("input_a"): True,  # a = 1
+#         GMWWire("input_cin"): True,  # cin = 1
+#     }
+#     party2_inputs = {GMWWire("input_b"): True}  # b = 1
+
+#     print("Party 1 inputs: a=1, cin=1")
+#     print("Party 2 inputs: b=1")
+#     print("Expected: 1+1+1 = sum=1, carry=1")
+
+#     result = protocol.execute_protocol(party1_inputs, party2_inputs)
+#     expected = circuit.evaluate_plaintext({**party1_inputs, **party2_inputs})
+
+#     print(f"GMW result: {result}")
+#     print(f"Expected: {expected}")
+#     print(f"Correct: {result == expected}")
+
+#     # Example 4: 2-bit Multiplier (Complex test)
+#     test_2bit_multiplier()
+
+#     # Statistics
+#     print("\n" + "=" * 70)
+#     print("PROTOCOL STATISTICS")
+#     print("=" * 70)
+
+#     circuits = [
+#         ("AND Circuit", create_gmw_and_circuit()),
+#         ("XOR Circuit", create_gmw_xor_circuit()),
+#         ("1-bit Adder", create_gmw_adder_circuit()),
+#         ("2-bit Multiplier", create_2bit_multiplier_circuit()),
+#     ]
+
+#     for name, circuit in circuits:
+#         and_gates = len(circuit.get_and_gates())
+#         xor_gates = len(circuit.get_xor_gates())
+#         total_gates = len(circuit.gates)
+
+#         print(
+#             f"{name:15} : {total_gates:3d} gates ({and_gates:2d} AND, {xor_gates:2d} XOR)"
+#         )
+#         print(f"                 Communication rounds for AND gates: {and_gates}")
 
 
 if __name__ == "__main__":
-    demonstrate_gmw_protocol()
+    # demonstrate_gmw_protocol()
+    test_not_gates()
