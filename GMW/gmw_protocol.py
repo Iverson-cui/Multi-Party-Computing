@@ -464,6 +464,25 @@ class GMWParty2:
         In online phase, party2 has a list for every and gate. He needs to transform the list based on the offset, and then pass the whole lists to party1.
         """
         # Get our shares of the input wires (x2, y2)
+        # First, ensure we have computed shares for the input wires if they're intermediate results
+        for input_wire in gate.input_wires:
+            if input_wire not in self.share_manager.shares:
+                # This input wire might be the output of another gate we need to evaluate first
+                # Find the gate that produces this wire
+
+                for circuit_gate in self.circuit.gates:
+                    if circuit_gate.output_wire == input_wire:
+                        if circuit_gate.gate_type == GMWGateType.XOR:
+                            self._evaluate_xor_gate(circuit_gate)
+                        elif circuit_gate.gate_type == GMWGateType.NOT:
+                            self._evaluate_not_gate(circuit_gate)
+                        elif circuit_gate.gate_type == GMWGateType.AND:
+                            # This shouldn't happen in proper topological order, but handle it
+                            raise RuntimeError(
+                                f"AND gate {gate.gate_id} depends on another AND gate {circuit_gate.gate_id}"
+                            )
+                        break
+
         x2 = self.share_manager.get_share(gate.input_wires[0])
         y2 = self.share_manager.get_share(gate.input_wires[1])
 
@@ -1001,6 +1020,8 @@ def demonstrate_gmw_protocol():
 
         # Create fresh protocol instance
         protocol = GMWProtocol(circuit)
+        # Run precomputation phase for AND gates
+        protocol.AND_gate_precompute()
         result = protocol.execute_protocol(party1_inputs, party2_inputs)
 
         # Extract result bits and convert to integer
@@ -1148,6 +1169,8 @@ def test_complex_boolean_circuit():
         }
 
         protocol = GMWProtocol(circuit)
+        # Run precomputation phase for AND gates
+        protocol.AND_gate_precompute()
         result = protocol.execute_protocol(party1_inputs, party2_inputs)
 
         output_val = result[GMWWire("output")]
@@ -1183,6 +1206,8 @@ def test_full_adder_circuit():
         }
 
         protocol = GMWProtocol(circuit)
+        # Run precomputation phase for AND gates
+        protocol.AND_gate_precompute()
         result = protocol.execute_protocol(party1_inputs, party2_inputs)
 
         sum_val = result[GMWWire("sum")]
@@ -1210,4 +1235,4 @@ def run_representative_tests():
 
 if __name__ == "__main__":
     # Run tests for the 2 representative circuits
-    test_simple_and_gate()
+    run_representative_tests()
