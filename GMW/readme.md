@@ -6,7 +6,7 @@ A complete implementation of the **Goldreich-Micali-Wigderson (GMW) Protocol** f
 ## Key Features
 
 This implementation can support circuit with AND, XOR and NOT gates. XOR and NOT gates are evaluated locally for both parties. AND gates need to go through 1-out-of-4 OTs.
-For now, the protocol evaluates the circuit gate by gate, no parallelism is included, nor does any precomputation and extension of OT. I have heard that the AND gate within the same layer can be processed in parallel and it's a feature TBD.
+For now, the protocol evaluates the circuit gate by gate, no parallelism is included. But the feature of **OT precomputation** is added and it is shown to have **greatly improved** the running time. I have heard that the AND gate within the same layer can be processed in parallel and it's a feature TBD.
 
 ## 📋 Protocol Flow
 
