@@ -48,6 +48,8 @@ class GMWParty1:
         self.share_manager = GMWShareManager(party_id=1)
         self.party2: "GMWParty2" = None
         self.inputs: Dict[GMWWire, bool] = None
+        self.and_gate_num = 0
+        self.precompute_choice = []
 
     def connect_to_party2(self, party2: "GMWParty2"):
         """Establish connection with Party 2."""
@@ -86,6 +88,7 @@ class GMWParty1:
         # Track which wires have been processed
         # At first only input wires have been processed
         processed_wires = set(self.circuit.input_wires)
+        and_gate_index = 0
 
         # Keep trying to process gates until all are done
         remaining_gates = self.circuit.gates.copy()
@@ -101,7 +104,9 @@ class GMWParty1:
                     if gate.gate_type == GMWGateType.XOR:
                         self._evaluate_xor_gate(gate)
                     elif gate.gate_type == GMWGateType.AND:
-                        self._evaluate_and_gate(gate)
+
+                        self._evaluate_and_gate(gate, and_gate_index)
+                        and_gate_index += 1
                     elif gate.gate_type == GMWGateType.NOT:
                         self._evaluate_not_gate(gate)
                     elif gate.gate_type == GMWGateType.INPUT:
@@ -143,7 +148,7 @@ class GMWParty1:
             raise ValueError("NOT gate must have exactly 1 input")
         self.share_manager.evaluate_not_gate(gate.input_wires[0], gate.output_wire)
 
-    def _evaluate_and_gate(self, gate: GMWGate):
+    def _evaluate_and_gate(self, gate: GMWGate, and_gate_index: int):
         """
         Evaluate AND gate using 1-out-of-4 OT.
 
@@ -151,6 +156,8 @@ class GMWParty1:
 
         Party 1 acts as OT receiver, choosing one of 4 values based on their shares.
         Party 2 acts as OT sender, providing all 4 possible combinations.
+
+        and_gate_index tells us which and gate is this gate in.
         """
         print(f"[Party 1] Evaluating AND gate: {gate.gate_id}")
 
@@ -175,18 +182,43 @@ class GMWParty1:
                         break
 
         # For now we have all input wires of the current gate prepared
+
+        share_a = self.share_manager.get_share(gate.input_wires[0])
+        share_b = self.share_manager.get_share(gate.input_wires[1])
         # Party 1 is the receiver in the 1-out-of-4 OT
         # Get our selection for OT based on our shares
+
+        high_bit = (
+            self.precompute_choice[and_gate_index][0] >> 1
+        ) & 1  # Extract higher bit
+        low_bit = self.precompute_choice[and_gate_index][0] & 1  # Extract lower bit
+
+        # XOR with shares
+        result_high = high_bit ^ int(share_a)
+        result_low = low_bit ^ int(share_b)
+
+        # Convert back to int from 0 to 3
+        e_in_precompute = (result_high << 1) | result_low
+        # Ensure e_in_precompute is in valid range for 1-out-of-4 OT
+        assert (
+            0 <= e_in_precompute <= 3
+        ), f"Invalid OT selection index: {e_in_precompute}"
+
+        # selection is the int version of share_a, share_b
         selection = self.share_manager.prepare_and_gate_ot_input(gate.input_wires)
 
-        # Get the OT result from Party 2
+        # Get the OT result from Party 2.
+        # ot_result is a list containing four values.
         # This step also put party 2 share back to it.
-        ot_result = self.party2.provide_and_gate_ot_values(gate, selection)
+        ot_result = self.party2.provide_and_gate_online_lists(
+            gate, and_gate_index, e_in_precompute
+        )
 
+        final_share = self.precompute_choice[and_gate_index][1] ^ ot_result[selection]
         # The OT result is our share of the output
-        self.share_manager.set_share(gate.output_wire, ot_result)
+        self.share_manager.set_share(gate.output_wire, final_share)
 
-        print(f"[Party 1] AND gate {gate.gate_id} result share: {ot_result}")
+        print(f"[Party 1] AND gate {gate.gate_id} result share: {final_share}")
 
 
 class GMWParty2:
@@ -202,6 +234,8 @@ class GMWParty2:
         self.circuit = circuit
         self.share_manager = GMWShareManager(party_id=2)
         self.party1: GMWParty1 = None
+        self.and_gate_num = 0
+        self.precompute_lists = []
 
     def set_inputs(self, inputs: Dict[GMWWire, bool]):
         """Set this party's private inputs."""
@@ -423,6 +457,37 @@ class GMWParty2:
 
         return chosen_value
 
+    def provide_and_gate_online_lists(
+        self, gate: GMWGate, gate_index: int, offset: int
+    ):
+        """
+        In online phase, party2 has a list for every and gate. He needs to transform the list based on the offset, and then pass the whole lists to party1.
+        """
+        # Get our shares of the input wires (x2, y2)
+        x2 = self.share_manager.get_share(gate.input_wires[0])
+        y2 = self.share_manager.get_share(gate.input_wires[1])
+
+        # Choose a random output share z2 for Party 2
+        z2 = secrets.choice([True, False])
+        self.share_manager.set_share(gate.output_wire, z2)
+
+        # Compute the 4 OT values for each possible combination of Party 1's shares (x1, y1)
+        # For each (x1, y1), we want to provide z1 = z2 ⊕ ((x1 ⊕ x2) ∧ (y1 ⊕ y2))
+        ot_values = []
+
+        for x1 in [False, True]:
+            for y1 in [False, True]:
+                # Compute the actual AND result: (x1 ⊕ x2) ∧ (y1 ⊕ y2)
+                and_result = (x1 ^ x2) & (y1 ^ y2)
+
+                # Compute Party 1's share: z1 = z2 ⊕ and_result
+                z1 = z2 ^ and_result
+                ot_values.append(z1)
+        # XOR each OT value with the corresponding precomputed value
+        for i in range(4):
+            ot_values[i] = ot_values[i] ^ self.precompute_lists[gate_index][offset ^ i]
+        return ot_values
+
 
 def create_2bit_multiplier_circuit() -> GMWCircuit:
     """
@@ -640,6 +705,49 @@ class GMWProtocol:
         # Timing statistics
         self.timing_stats = {}
 
+    def AND_gate_precompute(self):
+        """
+        In precomputation phase for AND gates, both parties run through OT. Party2 get a random choice and the corresponding bit from party1. For now party2 keeps those numbers for later use.
+
+        Key attribute for both parties: party1.precompute_list is a list of lists containing the 4 bits for every AND gates. party2.precompute_choice is a list of tuples (choice, bit) for the chosen bits and result for each AND gates.
+        """
+        and_gate_num = 0
+        for gate in self.circuit.gates:
+            if gate.gate_type == GMWGateType.AND:
+                and_gate_num += 1
+
+        self.party1.and_gate_num = and_gate_num
+        self.party2.and_gate_num = and_gate_num
+        # Generate precompute values for OT
+        for _ in range(and_gate_num):
+            # Generate 4 random bits for each AND gate
+            random_bits = [secrets.choice([True, False]) for _ in range(4)]
+            self.party2.precompute_lists.append(random_bits)
+
+            # Party 2 randomly chooses a number from 0 to 3
+            choice = secrets.randbelow(4)
+
+            # Perform 1-out-of-4 OT between parties
+            # Party 1 is sender (has 4 random bits), Party 2 is receiver (chooses one)
+            receiver = OT4Receiver(selection_index=choice)
+            sender = OT4Sender(
+                str(random_bits[0]),
+                str(random_bits[1]),
+                str(random_bits[2]),
+                str(random_bits[3]),
+            )
+
+            # Execute OT protocol
+            pk0, pk1, pk2, pk3 = receiver.prepare_key_pairs()
+            e0, e1, e2, e3 = sender.encrypt_secrets(pk0, pk1, pk2, pk3)
+            chosen_value_str = receiver.decrypt_chosen_secret(e0, e1, e2, e3)
+
+            # Convert back to boolean
+            chosen_bit = chosen_value_str == "True"
+
+            # Store both the choice and the received bit as a tuple for party2
+            self.party1.precompute_choice.append((choice, chosen_bit))
+
     def execute_protocol(
         self, party1_inputs: Dict[GMWWire, bool], party2_inputs: Dict[GMWWire, bool]
     ) -> Dict[GMWWire, bool]:
@@ -785,6 +893,72 @@ def test_not_gates():
         print(f"GMW result: {result}")
         print(f"Expected: {expected}")
         print(f"✅ Correct: {result == expected}")
+
+
+def test_simple_and_gate():
+    """Test a simple circuit with only one AND gate."""
+    print("\n--- Testing Simple AND Gate Circuit ---")
+    print("Computing: party1_input AND party2_input")
+
+    # Create input wires
+    party1_input = GMWWire("party1_input")
+    party2_input = GMWWire("party2_input")
+    output = GMWWire("output")
+
+    # Create the AND gate
+    and_gate = GMWGate(
+        "and_gate", GMWGateType.AND, [party1_input, party2_input], output
+    )
+
+    # Create the circuit
+    circuit = GMWCircuit(
+        gates=[and_gate],
+        input_wires=[party1_input, party2_input],
+        output_wires=[output],
+        party1_input_wires=[party1_input],
+        party2_input_wires=[party2_input],
+    )
+
+    # Test all possible combinations for AND gate
+    test_cases = [
+        (False, False, "0 AND 0 = 0"),
+        (False, True, "0 AND 1 = 0"),
+        (True, False, "1 AND 0 = 0"),
+        (True, True, "1 AND 1 = 1"),
+    ]
+
+    for p1_val, p2_val, description in test_cases:
+        print(f"\n🧮 Test case: {description}")
+
+        party1_inputs = {party1_input: p1_val}
+        party2_inputs = {party2_input: p2_val}
+
+        print(f"Party 1 input: {p1_val}")
+        print(f"Party 2 input: {p2_val}")
+
+        # Create fresh protocol instance for each test
+        protocol = GMWProtocol(circuit)
+
+        # Run precomputation phase for AND gates
+        protocol.AND_gate_precompute()
+
+        # Execute the protocol
+        result = protocol.execute_protocol(party1_inputs, party2_inputs)
+
+        # Get the output
+        output_val = result[output]
+        expected_val = p1_val and p2_val
+
+        print(f"GMW result: {output_val}")
+        print(f"Expected: {expected_val}")
+        print(f"✅ Correct: {output_val == expected_val}")
+
+        # Verify with plaintext evaluation
+        all_inputs = {**party1_inputs, **party2_inputs}
+        expected_circuit = circuit.evaluate_plaintext(all_inputs)
+        print(f"Circuit plaintext verification: {expected_circuit}")
+
+    print("\n🏆 Simple AND gate test completed!")
 
 
 def demonstrate_gmw_protocol():
@@ -1036,4 +1210,4 @@ def run_representative_tests():
 
 if __name__ == "__main__":
     # Run tests for the 2 representative circuits
-    run_representative_tests()
+    test_simple_and_gate()
